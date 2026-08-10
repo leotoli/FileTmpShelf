@@ -86,7 +86,9 @@ struct ShelfPanelView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
                         ForEach(model.items) { item in
-                            ShelfItemView(item: item)
+                            ShelfItemView(item: item) { moved in
+                                model.removeItem(moved)
+                            }
                         }
                     }
                     .padding(10)
@@ -133,6 +135,13 @@ final class ShelfPanelModel: ObservableObject {
         }
     }
 
+    func removeItem(_ item: ShelfItem) {
+        Task {
+            await store.remove(id: item.id)
+            items = await store.all()
+        }
+    }
+
     private func loadFileURL(from provider: NSItemProvider) async -> URL? {
         guard provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) else { return nil }
         return await withCheckedContinuation { continuation in
@@ -153,15 +162,21 @@ final class ShelfPanelModel: ObservableObject {
 }
 
 /// 条目视图：图标 + 名称 + 大小 + 来源路径
+/// 拖出（Spike S2）：不再用 `NSItemProvider(file URL)` 的复制语义。
+/// SwiftUI `.onDrag` 无法承载 NSFilePromiseProvider（Apple 确认），故 overlay 一个
+/// AppKit `FilePromiseDragView` 发起 promise 拖拽会话；Finder 兑现承诺时由
+/// `FilePromiseDragManager` 执行真实 moveItem，实现"拖出 = 移动 + 货架移除"。
 struct ShelfItemView: View {
     let item: ShelfItem
+    /// 移动成功后的回调（通知货架移除该条目）
+    var onMoveCompleted: (ShelfItem) -> Void
 
     @ViewBuilder
     var body: some View {
         if item.isReachable {
-            content.onDrag {
-                NSItemProvider(object: item.fileURL as NSURL)
-            }
+            content.overlay(
+                FilePromiseDragRepresentable(item: item, onMoveCompleted: onMoveCompleted)
+            )
         } else {
             content.opacity(0.6)
         }
