@@ -59,6 +59,10 @@ final class HotKeyManagerTests: XCTestCase {
     /// 注意：合成键盘事件投递需要「输入监控/辅助功能」权限（AXIsProcessTrusted）。
     /// 无权限时事件会被系统丢弃，因此本用例在无权限环境下跳过（XCTSkip），
     /// 避免在 CI/无头环境挂起；有权限环境下真实验证回调触发。
+    ///
+    /// 时序稳定性：Carbon 热键注册与 CGEvent 投递之间存在 race —— 事件可能在注册
+    /// 完全生效前被系统丢弃（曾实测偶发超时）。因此 post 前先排水 run loop 让注册
+    /// 稳定，并重试投递最多 3 次，确保本用例在 CI 上稳定而非 flaky。
     func testCallbackFiresOnSimulatedOptionC() throws {
         guard AXIsProcessTrusted() else {
             throw XCTSkip("缺少辅助功能权限，跳过 CGEvent 模拟按键测试（S3 边界条件：有权限时验证）")
@@ -68,14 +72,23 @@ final class HotKeyManagerTests: XCTestCase {
         try manager.register()
         defer { manager.unregister() }
 
+        // 排水 run loop：让 Carbon 热键注册在事件循环中稳定生效
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+
         let fired = expectation(description: "⌥C 回调触发")
         manager.onTrigger = {
             fired.fulfill()
         }
 
-        postOptionCKeyPress()
-
-        wait(for: [fired], timeout: 5)
+        // 重试投递最多 3 次（每次间隔 0.2s），规避 post 时序竞态
+        for attempt in 1...3 {
+            postOptionCKeyPress()
+            // 每次等待至多 2s；expectation 已 fulfill 则提前返回
+            let result = XCTWaiter.wait(for: [fired], timeout: 2)
+            if result == .completed { return }
+            print("[HotKeyManagerTests] 第 \(attempt) 次投递未触发，重试…")
+        }
+        XCTFail("3 次投递后 ⌥C 回调仍未触发")
     }
 
     private func postOptionCKeyPress() {

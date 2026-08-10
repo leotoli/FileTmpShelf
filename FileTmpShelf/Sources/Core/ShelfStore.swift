@@ -34,6 +34,8 @@ struct ShelfItem: Identifiable, Codable, Equatable {
     static func make(from url: URL) -> ShelfItem? {
         let resourceKeys: Set<URLResourceKey> = [
             .isRegularFileKey,
+            .isDirectoryKey,
+            .isSymbolicLinkKey,
             .fileSizeKey,
             .isUbiquitousItemKey,
             .ubiquitousItemDownloadingStatusKey
@@ -42,14 +44,28 @@ struct ShelfItem: Identifiable, Codable, Equatable {
             return nil
         }
         let isCloud = values.isUbiquitousItem ?? false
-        // .current = 本地已有完整副本；.downloaded/.notDownloaded = 云端占位（未下载）
+        // 只有 .notDownloaded 才是真正的云端占位（本地仅有 .icloud 存根）；
+        // .downloaded 已有本地副本（可能略旧于云端），.current 为最新本地副本。
         let status = values.ubiquitousItemDownloadingStatus ?? .current
-        let isPlaceholder = isCloud && status != .current
-        let size = values.fileSize ?? 0
+        let isPlaceholder = isCloud && status == .notDownloaded
+
+        // fileSize 语义：普通文件取本体大小；目录的 fileSize 只是目录条目元数据（非递归），记 0；
+        // 符号链接按目标解析——目标为普通文件取目标大小，悬空链接/链接到目录记 0。
+        let fileSize: Int64
+        if values.isRegularFile == true {
+            fileSize = Int64(values.fileSize ?? 0)
+        } else if values.isSymbolicLink == true {
+            let resolved = url.resolvingSymlinksInPath()
+            let targetValues = try? resolved.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+            fileSize = (targetValues?.isRegularFile == true) ? Int64(targetValues?.fileSize ?? 0) : 0
+        } else {
+            fileSize = 0
+        }
+
         return ShelfItem(
             path: url.path,
             displayName: url.lastPathComponent,
-            fileSize: Int64(size),
+            fileSize: fileSize,
             sourceParentPath: url.deletingLastPathComponent().path,
             isCloudPlaceholder: isPlaceholder
         )
@@ -57,9 +73,10 @@ struct ShelfItem: Identifiable, Codable, Equatable {
 
     var fileURL: URL { URL(fileURLWithPath: path) }
 
-    /// 文件当前是否可达
+    /// 文件当前是否可达（iCloud 占位仅剩 .icloud 存根，视为不可达）
     var isReachable: Bool {
-        FileManager.default.fileExists(atPath: path)
+        guard !isCloudPlaceholder else { return false }
+        return FileManager.default.fileExists(atPath: path)
     }
 }
 
@@ -88,16 +105,22 @@ actor ShelfStore {
         persist()
     }
 
-    /// 批量挂载，返回挂载耗时（Spike S1 性能验证）
-    func addBatch(_ urls: [URL]) -> (count: Int, elapsed: TimeInterval) {
+    /// 批量挂载，返回本次成功挂载数、被跳过的 URL 与总耗时（Spike S1 性能验证）。
+    /// 注：返回的 count 为本次实际挂载数（非货架总数），便于 UI 提示"哪些没挂上"。
+    func addBatch(_ urls: [URL]) -> (count: Int, skipped: [URL], elapsed: TimeInterval) {
         let start = Date()
+        var skipped: [URL] = []
+        var mounted = 0
         for url in urls {
             if let item = ShelfItem.make(from: url) {
                 items.append(item)
+                mounted += 1
+            } else {
+                skipped.append(url)
             }
         }
         persist()
-        return (items.count, Date().timeIntervalSince(start))
+        return (mounted, skipped, Date().timeIntervalSince(start))
     }
 
     /// 移除条目（拖出成功 / 用户清空 / 失效清理）
