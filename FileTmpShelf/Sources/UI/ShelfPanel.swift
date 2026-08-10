@@ -40,6 +40,8 @@ final class ShelfPanelController: NSObject {
         )
         newPanel.level = .floating
         newPanel.isFloatingPanel = true
+        newPanel.becomesKeyOnlyIfNeeded = true
+        newPanel.isMovableByWindowBackground = true
         newPanel.hidesOnDeactivate = false
         newPanel.backgroundColor = .clear
         newPanel.isOpaque = false
@@ -117,26 +119,35 @@ final class ShelfPanelModel: ObservableObject {
     }
 
     func addDroppedFiles(_ providers: [NSItemProvider]) {
-        let urls = providers.compactMap { provider -> URL? in
-            guard provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) else { return nil }
-            var result: URL?
-            let semaphore = DispatchSemaphore(value: 0)
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                if let data = item as? Data,
-                   let url = URL(dataRepresentation: data, relativeTo: nil) {
-                    result = url
-                } else if let url = item as? URL {
-                    result = url
-                }
-                semaphore.signal()
-            }
-            semaphore.wait()
-            return result
-        }
         Task {
+            var urls: [URL] = []
+            for provider in providers {
+                if let url = await loadFileURL(from: provider) {
+                    urls.append(url)
+                }
+            }
+            guard !urls.isEmpty else { return }
             let outcome = await store.addBatch(urls)
             items = await store.all()
             print("[ShelfPanel] 挂载 \(urls.count) 个文件, 共 \(outcome.count) 条, 耗时 \(String(format: "%.3f", outcome.elapsed))s")
+        }
+    }
+
+    private func loadFileURL(from provider: NSItemProvider) async -> URL? {
+        guard provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) else { return nil }
+        return await withCheckedContinuation { continuation in
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                let url: URL?
+                if let data = item as? Data,
+                   let parsed = URL(dataRepresentation: data, relativeTo: nil) {
+                    url = parsed
+                } else if let parsed = item as? URL {
+                    url = parsed
+                } else {
+                    url = nil
+                }
+                continuation.resume(returning: url)
+            }
         }
     }
 }
@@ -145,7 +156,18 @@ final class ShelfPanelModel: ObservableObject {
 struct ShelfItemView: View {
     let item: ShelfItem
 
+    @ViewBuilder
     var body: some View {
+        if item.isReachable {
+            content.onDrag {
+                NSItemProvider(object: item.fileURL as NSURL)
+            }
+        } else {
+            content.opacity(0.6)
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Image(systemName: item.isCloudPlaceholder ? "cloud" : "doc")
