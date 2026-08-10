@@ -140,12 +140,14 @@ PRD v0.2 中有 4 个核心架构决策目前是**未经验证的假设**。正�
 - [ ] 无需辅助功能权限（系统设置中不出现"输入监控"授权要求）—— 这是 dmg 分发的体验底线
 - [ ] 录制 UI 可用性确认
 
-### 5.4 决策门槛
+### 5.5 Spike 执行记录（实时更新）
 
-| 结果 | 决策 |
-|------|------|
-| Carbon 可行且免权限 | 决策 4 确认 |
-| Carbon 被系统限制（如 macOS 15 变化） | 评估 NSEvent 监听（需辅助功能权限，PRD 需更新）或第三方库 |
+| Spike | 状态 | 结论 | 执行记录 |
+|-------|------|------|---------|
+| S3 热键 | ✅ 已验证（2026-08-10） | **Carbon 方案可行**：注册/冲突检测/unregister 重注册全部通过；CGEvent 模拟 ⌥C 真实触发回调（当前环境有辅助功能权限）；无权限环境测试安全跳过不挂起 | 提交 `d5d0736`，10/10 测试通过。register() 原子化（失败回滚）、eventHotKeyExistsErr → hotKeyExists 映射、AppEntry 冲突提示到菜单标题 |
+| S1 存储 | ✅ 已验证（2026-08-10） | **直接 URL 方案成立，bookmark 不必要**：非沙盒下 URL + fileExists 即够；移动/删除源文件后 isReachable 可靠变 false；100 文件挂载实测 0.004s（远低于 1.5s）；chmod 000/文件夹/符号链接/悬空链接均正常 | 提交 `3263ed8`，16/16 测试通过（连续 2 次）。修复：iCloud 占位判定 `.notDownloaded`、目录 fileSize=0、符号链接解析目标大小、addBatch 返回 skipped；PM 修复 CGEvent flaky（run loop 排水+重试） |
+| S2 拖出移动 | ✅ 代码层已验证（2026-08-11） | **NSFilePromiseProvider 方案可行**：writePromiseToURL 回调执行 moveItem 实现"承诺交付=移动"；成功才通知货架移除、失败源保留（数据零丢失）；成功/失败/文件夹/冲突 9 个单测全绿；**Finder 真实拖出需人工验收** | 提交（S2 系列），FilePromiseDragManager + FilePromiseDragView（SwiftUI .onDrag 无法承载 file promise，用 AppKit NSDraggingItem 发起）。PM 修复：动态 UTI 过滤、public.directory 期望值、集成测试环境变量控制。25 测试 0 失败 |
+| S4 面板拖放 | ✅ 代码层已验证（2026-08-10） | 配置完善：`becomesKeyOnlyIfNeeded=true`（不抢键焦点）+ `isMovableByWindowBackground`；drop 异步化修复主线程死锁；条目可拖出（NSItemProvider file URL）；**真机焦点行为待 MANUAL_CHECK_S4.md 人工验收** | 提交 `d90959f`，16/16 测试通过。真机验收清单见 docs/MANUAL_CHECK_S4.md |
 
 ---
 
