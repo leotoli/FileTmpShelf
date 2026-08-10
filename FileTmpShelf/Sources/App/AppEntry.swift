@@ -34,17 +34,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.menu = menu
         statusItem = item
 
-        // 全局热键
-        let hotKey = HotKeyManager(keyCode: HotKeyManager.keyCodeForOptionC, modifiers: [.option])
-        hotKey.onTrigger = { [weak self] in
-            self?.togglePanel()
-        }
-        hotKeyManager = hotKey
-
         // 面板
         panelController = ShelfPanelController()
 
-        hotKey.register()
+        // 全局热键：单元测试宿主环境下跳过，避免与测试自身的注册冲突
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            let hotKey = HotKeyManager(keyCode: HotKeyManager.keyCodeForOptionC, modifiers: [.option])
+            hotKey.onTrigger = { [weak self] in
+                self?.togglePanel()
+            }
+            hotKeyManager = hotKey
+            registerHotKey(hotKey)
+        }
+    }
+
+    private func registerHotKey(_ hotKey: HotKeyManager) {
+        do {
+            try hotKey.register()
+        } catch HotKeyManager.RegisterError.hotKeyExists {
+            NSLog("⌥C 已被其他应用占用，快捷键不可用")
+            statusItem?.menu?.item(at: 0)?.title = "显示/隐藏货架 (⌥C) — 快捷键冲突"
+        } catch {
+            NSLog("热键注册失败: %@", String(describing: error))
+            statusItem?.menu?.item(at: 0)?.title = "显示/隐藏货架 (⌥C) — 注册失败"
+        }
     }
 
     @objc private func togglePanel() {

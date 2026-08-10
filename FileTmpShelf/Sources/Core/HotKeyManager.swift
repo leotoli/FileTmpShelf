@@ -24,53 +24,62 @@ final class HotKeyManager {
     private let keyCode: UInt32
     private let modifiers: NSEvent.ModifierFlags
 
-    /// 由面板控制器注入的触发回调
+    /// 由面板控制器注入的触发回调。
+    /// 注意：Carbon 热键事件在主线程派发，因此 onTrigger 总是被调用在主线程。
     var onTrigger: (() -> Void)?
-
-    /// 冲突检测：注册前先探测是否已被占用
-    var isConflicting: Bool {
-        // Carbon 会返回 eventHotKeyExistsErr (-9878) 当热键已被注册（本 app 或其他 app）
-        // 更精确的全局占用检测需要辅助功能权限，V1 仅探测本进程内冲突
-        return false
-    }
 
     init(keyCode: UInt32, modifiers: NSEvent.ModifierFlags) {
         self.keyCode = keyCode
         self.modifiers = modifiers
     }
 
-    /// 注册全局热键
-    func register() throws {
-        var eventType = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
+    /// 冲突检测：通过 register() 抛出的 `RegisterError.hotKeyExists` 识别。
+    /// Carbon 的 `RegisterEventHotKey` 在热键已被注册（本 app 或其他 app）时
+    /// 返回 `eventHotKeyExistsErr` (-9878)，无需辅助功能权限即可可靠检测本进程内冲突。
+    /// 更精确的「全系统占用清单」检测需要辅助功能权限，V1 不做。
 
-        InstallEventHandler(
-            GetApplicationEventTarget(),
-            { (_, event, userData) -> OSStatus in
-                guard let userData else { return noErr }
-                let manager = Unmanaged<HotKeyManager>.fromOpaque(userData).takeUnretainedValue()
-                var hotKeyID = EventHotKeyID()
-                GetEventParameter(
-                    event,
-                    EventParamName(kEventParamDirectObject),
-                    EventParamType(typeEventHotKeyID),
-                    nil,
-                    MemoryLayout<EventHotKeyID>.size,
-                    nil,
-                    &hotKeyID
-                )
-                if hotKeyID.id == 1 {
-                    manager.onTrigger?()
-                }
-                return noErr
-            },
-            1,
-            &eventType,
-            Unmanaged.passUnretained(self).toOpaque(),
-            &eventHandlerRef
-        )
+    /// 注册全局热键。
+    /// - 安装事件处理器失败（InstallEventHandler 非 noErr）时抛出 `osStatus`
+    /// - 热键已被占用（RegisterEventHotKey 返回 eventHotKeyExistsErr）时抛出 `hotKeyExists`
+    /// - 其余非 noErr 状态码抛出 `osStatus`
+    /// register() 是原子的：失败时会回滚已安装的事件处理器，可安全重试。
+    func register() throws {
+        if eventHandlerRef == nil {
+            var eventType = EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyPressed)
+            )
+
+            let installStatus = InstallEventHandler(
+                GetApplicationEventTarget(),
+                { (_, event, userData) -> OSStatus in
+                    guard let userData else { return noErr }
+                    let manager = Unmanaged<HotKeyManager>.fromOpaque(userData).takeUnretainedValue()
+                    var hotKeyID = EventHotKeyID()
+                    GetEventParameter(
+                        event,
+                        EventParamName(kEventParamDirectObject),
+                        EventParamType(typeEventHotKeyID),
+                        nil,
+                        MemoryLayout<EventHotKeyID>.size,
+                        nil,
+                        &hotKeyID
+                    )
+                    if hotKeyID.id == 1 {
+                        manager.onTrigger?()
+                    }
+                    return noErr
+                },
+                1,
+                &eventType,
+                Unmanaged.passUnretained(self).toOpaque(),
+                &eventHandlerRef
+            )
+            guard installStatus == noErr else {
+                eventHandlerRef = nil
+                throw RegisterError.osStatus(installStatus)
+            }
+        }
 
         let hotKeyID = EventHotKeyID(signature: OSType(0x46545348), id: 1) // "FTSH"
         let carbonModifiers = carbonModifierFlags(from: modifiers)
@@ -83,7 +92,14 @@ final class HotKeyManager {
             &hotKeyRef
         )
         guard status == noErr else {
-            throw RegisterError.osStatus(status)
+            // 回滚：去掉本 call 安装的事件处理器，保证 register() 原子性
+            if let eventHandlerRef {
+                RemoveEventHandler(eventHandlerRef)
+                self.eventHandlerRef = nil
+            }
+            throw status == eventHotKeyExistsErr
+                ? RegisterError.hotKeyExists
+                : RegisterError.osStatus(status)
         }
     }
 
@@ -96,6 +112,11 @@ final class HotKeyManager {
             RemoveEventHandler(eventHandlerRef)
             self.eventHandlerRef = nil
         }
+    }
+
+    deinit {
+        // 防止用户数据指针悬挂：管理器释放前必须先移除 Carbon 事件处理器。
+        unregister()
     }
 
     private func carbonModifierFlags(from flags: NSEvent.ModifierFlags) -> UInt32 {

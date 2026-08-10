@@ -10,6 +10,7 @@
 		0681C05447DBB7C5E652915C /* ShelfStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83C46347A255D1216C305A3A /* ShelfStoreTests.swift */; };
 		216C20CB2CE4CDBFE22B7290 /* AppEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E57C8BCA0B32BA03206EBDD /* AppEntry.swift */; };
 		674741E72C016208C6468037 /* HotKeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10127467ED0091A27C5F70EE /* HotKeyManager.swift */; };
+		85CA99F9A8A1430F42FCA381 /* HotKeyManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38CEE07704E2657BC74F04DE /* HotKeyManagerTests.swift */; };
 		B6EE6CD264DBF04592921ACC /* ShelfPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A27EA80D449658D211B3FBA /* ShelfPanel.swift */; };
 		C18CC65737B44657D9DB2600 /* ShelfStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1BCA0FCE8839EC24FA4E2C2 /* ShelfStore.swift */; };
 /* End PBXBuildFile section */
@@ -28,6 +29,7 @@
 		10127467ED0091A27C5F70EE /* HotKeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotKeyManager.swift; sourceTree = "<group>"; };
 		23F5BF4565801A6475A6D3F0 /* FileTmpShelfTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FileTmpShelfTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2E57C8BCA0B32BA03206EBDD /* AppEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEntry.swift; sourceTree = "<group>"; };
+		38CEE07704E2657BC74F04DE /* HotKeyManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotKeyManagerTests.swift; sourceTree = "<group>"; };
 		4A27EA80D449658D211B3FBA /* ShelfPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShelfPanel.swift; sourceTree = "<group>"; };
 		508E07AE04884175876AD8ED /* FileTmpShelf.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FileTmpShelf.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		83C46347A255D1216C305A3A /* ShelfStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShelfStoreTests.swift; sourceTree = "<group>"; };
@@ -65,6 +67,7 @@
 		48DF37B5ABFB6E34ADC382C3 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				38CEE07704E2657BC74F04DE /* HotKeyManagerTests.swift */,
 				83C46347A255D1216C305A3A /* ShelfStoreTests.swift */,
 			);
 			path = Tests;
@@ -176,6 +179,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				85CA99F9A8A1430F42FCA381 /* HotKeyManagerTests.swift in Sources */,
 				0681C05447DBB7C5E652915C /* ShelfStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
