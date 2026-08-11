@@ -51,11 +51,11 @@ func drawIcon(size: Int) -> CGImage {
         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
     )!
 
-    // 1. 背景：通透青蓝渐变（玻璃透光感）
+    // 1. 背景：柔和青蓝渐变（活泼但降低饱和度，护眼）
     let bgColors = [
-        rgba(0.35, 0.78, 0.98),   // 顶部亮青
-        rgba(0.30, 0.58, 0.97),   // 中部蓝
-        rgba(0.55, 0.38, 0.95)    // 底部紫
+        rgba(0.45, 0.80, 0.96),   // 顶部柔和青
+        rgba(0.44, 0.62, 0.94),   // 中部柔和蓝
+        rgba(0.60, 0.48, 0.90)    // 底部柔和紫
     ] as CFArray
     let bgGrad = CGGradient(colorsSpace: sRGB, colors: bgColors, locations: [0, 0.5, 1])!
     ctx.drawLinearGradient(
@@ -145,15 +145,22 @@ func drawIcon(size: Int) -> CGImage {
     ctx.addPath(roundedRectPath(cardRect.insetBy(dx: 4 * u, dy: 4 * u), radius: 36 * u))
     ctx.strokePath()
 
-    // 5c. 卡片内容线（三道半透明白线，代表文件内容；不用小圆点）
-    ctx.setStrokeColor(rgba(1, 1, 1, 0.75))
-    ctx.setLineWidth(18 * u)
-    ctx.setLineCap(.round)
-    for i in 0..<3 {
+    // 5c. 卡片内容线 → 参考图风格：蓝紫系细线（去暖色，收敛）
+    let accentColors: [(CGFloat, CGFloat, CGFloat)] = [
+        (0.62, 0.72, 0.95),   // 柔和蓝
+        (0.72, 0.64, 0.94),   // 柔和紫
+        (0.55, 0.80, 0.92)    // 柔和青
+    ]
+    for (i, c) in accentColors.enumerated() {
         let lineY = cardRect.minY + 84 * u + CGFloat(i) * 56 * u
         let lineMaxX = cardRect.maxX - (i == 2 ? 150.0 : 52.0) * u
-        ctx.move(to: CGPoint(x: cardRect.minX + 52 * u, y: lineY))
-        ctx.addLine(to: CGPoint(x: lineMaxX, y: lineY))
+        let linePath = CGMutablePath()
+        linePath.move(to: CGPoint(x: cardRect.minX + 52 * u, y: lineY))
+        linePath.addLine(to: CGPoint(x: lineMaxX, y: lineY))
+        ctx.setStrokeColor(rgba(c.0, c.1, c.2, 0.85))
+        ctx.setLineWidth(18 * u)
+        ctx.setLineCap(.round)
+        ctx.addPath(linePath)
         ctx.strokePath()
     }
 
@@ -169,6 +176,9 @@ func drawIcon(size: Int) -> CGImage {
         options: []
     )
     ctx.restoreGState()
+
+    // 7. 活泼装饰已移除（用户反馈参考图不需要闪光星）：
+    //    保持玻璃托盘 + 文档卡片的简洁结构，聚焦"暂存"语义。
 
     return ctx.makeImage()!
 }
