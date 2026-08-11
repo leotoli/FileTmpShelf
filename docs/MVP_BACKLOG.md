@@ -207,8 +207,16 @@ Task 5 (全量回归 + 手动验收终版)
 
 ---
 
+## 附：决策记录（2026-08-11 已拍板）
+
+1. **设置窗口技术形态**：采用 **SwiftUI `Settings` 场景**（标准系统设置窗口，`Settings { SettingsView() }` 已就位，补齐表单内容即可）
+2. **开机启动 API**：采用 **SMAppService**（macOS 13+，需签名后真机验证；开发期逻辑可测，正式依赖 dmg 签名）
+3. **匿名统计**：**V1 不加入**（避免隐私条款复杂度），V2 再议
+
+---
+
 ## 附：给评审的问题
 
-1. 设置窗口用 **SwiftUI Settings Scene**（`Settings` 场景，标准系统设置窗口）还是自定义 NSWindow？——建议前者，系统一致性更好
-2. 开机启动用 **SMAppService**（macOS 13+，需签名）还是旧 LoginItems API？——建议 SMAppService，符合 M 系列专属定位
-3. 是否需要 V1 就加入**匿名使用统计**（影响 PRD 隐私条款）？——默认不加，V2 再议
+~~1. 设置窗口用 SwiftUI Settings Scene 还是自定义 NSWindow？——已决策：Settings 场景~~
+~~2. 开机启动用 SMAppService 还是旧 LoginItems API？——已决策：SMAppService~~
+~~3. 是否需要 V1 就加入匿名使用统计？——已决策：V1 不加，V2 再议~~
