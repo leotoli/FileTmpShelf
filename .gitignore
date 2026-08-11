@@ -17,3 +17,5 @@ build/
 
 # 打包产物
 dist/
+# 签名凭据（私钥敏感）
+DeveloperID/
