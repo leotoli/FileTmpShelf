@@ -41,6 +41,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.updateBadge(count: count)
         }
 
+        // 调试钩子：open --args -showPanelOnLaunch YES 启动即显示面板
+        // （绕过全局热键，便于 GUI 自动化验收）
+        if UserDefaults.standard.bool(forKey: "showPanelOnLaunch") {
+            panelController?.show()
+        }
+
         // 全局热键：单元测试宿主环境下跳过，避免与测试自身的注册冲突
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
             let hotKey = HotKeyManager(keyCode: HotKeyManager.keyCodeForOptionC, modifiers: [.option])
