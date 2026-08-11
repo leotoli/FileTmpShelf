@@ -1,5 +1,5 @@
 import AppKit
-import Carbon.HIToolbox
+import Carbon
 
 /// 全局快捷键管理器（Carbon RegisterEventHotKey）。
 /// Spike S3 目标：验证 ⌥C 全局唤起的低延迟、无辅助功能权限依赖、冲突检测。
@@ -21,8 +21,8 @@ final class HotKeyManager {
 
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
-    private let keyCode: UInt32
-    private let modifiers: NSEvent.ModifierFlags
+    private var keyCode: UInt32
+    private var modifiers: NSEvent.ModifierFlags
 
     /// 由面板控制器注入的触发回调。
     /// 注意：Carbon 热键事件在主线程派发，因此 onTrigger 总是被调用在主线程。
@@ -114,6 +114,17 @@ final class HotKeyManager {
         }
     }
 
+    /// 运行时切换快捷键（设置窗口「录制」后调用）：
+    /// unregister 旧键 → 记录新键 → register 新键。
+    /// 若新键已被其他进程占用则抛 `RegisterError.hotKeyExists`，此时旧键已释放、
+    /// 新键未占用（保持可读错误，不崩溃），调用方据此提示冲突。
+    func update(keyCode: UInt32, modifiers: NSEvent.ModifierFlags) throws {
+        unregister()
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+        try register()
+    }
+
     deinit {
         // 防止用户数据指针悬挂：管理器释放前必须先移除 Carbon 事件处理器。
         unregister()
@@ -126,5 +137,47 @@ final class HotKeyManager {
         if flags.contains(.control) { carbon |= UInt32(controlKey) }
         if flags.contains(.shift) { carbon |= UInt32(shiftKey) }
         return carbon
+    }
+
+    // MARK: - 展示
+
+    /// 把键码 + 修饰符格式化为可读组合（如 "⌥C"），供菜单栏标题 / 录制 UI 显示。
+    static func displayString(keyCode: UInt32, modifiers: NSEvent.ModifierFlags) -> String {
+        let symbols: [(NSEvent.ModifierFlags, String)] = [
+            (.control, "⌃"), (.option, "⌥"), (.shift, "⇧"), (.command, "⌘")
+        ]
+        let prefix = symbols.filter { modifiers.contains($0.0) }.map(\.1).joined()
+        return prefix + (character(forKeyCode: keyCode) ?? "键码\(keyCode)")
+    }
+
+    /// 通过当前键盘布局把虚拟键码转成单字符（kUCKeyActionDisplay，无修饰键）。
+    private static func character(forKeyCode keyCode: UInt32) -> String? {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue() else {
+            return nil
+        }
+        guard let layoutData = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else {
+            return nil
+        }
+        let data = unsafeBitCast(layoutData, to: CFData.self)
+        guard let bytes = CFDataGetBytePtr(data) else { return nil }
+        let layout = bytes.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) { $0 }
+
+        var chars = [UniChar](repeating: 0, count: 4)
+        var length = 0
+        var deadKeyState: UInt32 = 0
+        let status = UCKeyTranslate(
+            layout,
+            UInt16(keyCode),
+            UInt16(kUCKeyActionDisplay),
+            0,
+            UInt32(LMGetKbdType()),
+            OptionBits(kUCKeyTranslateNoDeadKeysBit),
+            &deadKeyState,
+            chars.count,
+            &length,
+            &chars
+        )
+        guard status == noErr, length > 0 else { return nil }
+        return String(utf16CodeUnits: chars, count: length)
     }
 }

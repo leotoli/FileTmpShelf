@@ -70,6 +70,39 @@ final class HotKeyManagerTests: XCTestCase {
         manager.unregister()
     }
 
+    /// Task 1 — update(keyCode:modifiers:) 重注册：
+    /// 旧键（⌥C）被释放可被新实例注册，新键被本实例占用（再次注册抛 hotKeyExists）。
+    func testUpdateUnregistersOldKeyAndRegistersNewKey() throws {
+        let manager = makeOptionC()
+        do {
+            try manager.register()
+        } catch HotKeyManager.RegisterError.hotKeyExists {
+            throw XCTSkip("⌥C 被其他进程占用，跳过 update 重注册验证")
+        }
+        defer { manager.unregister() }
+
+        // 切换到 ⌥V（V = kVK_ANSI_V = 9）
+        let newKeyCode: UInt32 = 9
+        do {
+            try manager.update(keyCode: newKeyCode, modifiers: [.option])
+        } catch HotKeyManager.RegisterError.hotKeyExists {
+            throw XCTSkip("⌥V 被其他进程占用，跳过 update 重注册验证")
+        }
+
+        // 旧键应已被释放 → ⌥C 可被新实例成功注册
+        let probe = makeOptionC()
+        defer { probe.unregister() }
+        XCTAssertNoThrow(try probe.register(), "update 后旧键 ⌥C 应被释放，可重新注册")
+
+        // 新键应已被本实例占用 → 再次注册 ⌥V 抛 hotKeyExists
+        let conflict = HotKeyManager(keyCode: newKeyCode, modifiers: [.option])
+        XCTAssertThrowsError(try conflict.register()) { error in
+            guard case HotKeyManager.RegisterError.hotKeyExists = error else {
+                return XCTFail("update 后新键应被占用，期望 hotKeyExists，实际: \(error)")
+            }
+        }
+    }
+
     /// 通过 CGEvent 模拟 ⌥C 按键，验证 Carbon 回调触发（后台全局热键语义）。
     ///
     /// ⚠️ 集成测试（非单元测试）：依赖 ①辅助功能权限（AXIsProcessTrusted，按可执行

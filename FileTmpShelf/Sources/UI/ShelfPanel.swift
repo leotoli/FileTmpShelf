@@ -7,9 +7,17 @@ import UniformTypeIdentifiers
 final class ShelfPanelController: NSObject {
     private var panel: NSPanel?
     private let store = ShelfStore()
+    private let settings: SettingsStore
+    private var panelOpacity: Double
 
     /// 条目数变化回调（菜单栏角标用，体验增强 3.4）
     var onItemCountChange: ((Int) -> Void)?
+
+    init(settings: SettingsStore = SettingsStore.shared) {
+        self.settings = settings
+        self.panelOpacity = settings.panelOpacity
+        super.init()
+    }
 
     var isVisible: Bool {
         panel?.isVisible ?? false
@@ -34,14 +42,16 @@ final class ShelfPanelController: NSObject {
         panel?.orderOut(nil)
     }
 
-    /// 清空货架（体验缺陷 2.2）：>3 条时确认；≤3 条直接清空。
+    /// 清空货架（体验缺陷 2.2）：超过设置阈值时确认；≤阈值直接清空；
+    /// 阈值 = 0（始终确认）则每次都弹确认。
     /// 只移除引用，不删除源文件。
     func clearAllWithConfirmation() {
         Task { @MainActor in
             let count = await store.count
             guard count > 0 else { return }
 
-            if count > 3 {
+            let threshold = settings.clearThreshold
+            if threshold == SettingsStore.alwaysConfirmThreshold || count > threshold {
                 let alert = NSAlert()
                 alert.messageText = "确定清空货架？"
                 alert.informativeText = "将移除 \(count) 个货架条目（仅移除引用，不会删除任何源文件）。"
@@ -54,6 +64,12 @@ final class ShelfPanelController: NSObject {
             await store.removeAll()
             onItemCountChange?(0)
         }
+    }
+
+    /// 应用面板透明度（设置滑块实时生效；面板未创建时记录，创建时应用）
+    func applyOpacity(_ value: Double) {
+        panelOpacity = value
+        panel?.alphaValue = value
     }
 
     private func createPanel() {
@@ -72,6 +88,7 @@ final class ShelfPanelController: NSObject {
         newPanel.isOpaque = false
         newPanel.hasShadow = true
         newPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        newPanel.alphaValue = panelOpacity
 
         let content = NSHostingView(
             rootView: ShelfPanelView(store: store) { [weak self] count in
