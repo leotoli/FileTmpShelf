@@ -203,7 +203,7 @@ Task 5 (全量回归 + 手动验收终版)
 | Task 2 设置持久化 | ✅ 完成（2026-08-11） | `21701ec` | SettingsStore + 热键重注册（与 Task 1 合并交付）；SMAppService 未签名容错 |
 | Task 3 图标+dmg | ✅ 完成（2026-08-11） | `9a784c8` | 图标全套 + build-dmg.sh 端到端产出 dmg（1.4MB 可挂载启动）；签名/公证待证书配置 |
 | Task 4 文档发布就绪 | ✅ 完成（2026-08-11） | `0acfb4b` | README/FAQ/Release Notes/终版验收清单；文档值 vs 源码核对一致 |
-| Task 5 回归+验收终版 | 🔄 进行中（2026-08-11） | — | 发布 Gate：全量测试 + dmg RC + 手动验收 |
+| Task 5 回归+验收终版 | ✅ 完成（2026-08-11） | — | 发布 Gate 全过：36 测试 0 失败；RC dmg 1.4MB 可挂载含 app+Applications；文档一致；剩余=签名/公证（需 Developer ID）+ 真机手动验收清单 |
 
 ---
 
