@@ -118,4 +118,36 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.panelOpacity, SettingsStore.defaultPanelOpacity, accuracy: 0.0001)
         XCTAssertEqual(reloaded.clearThreshold, SettingsStore.defaultClearThreshold)
     }
+
+    // MARK: - 清除确认策略（V2-3）
+
+    /// ≤ 阈值直接清空；> 阈值或「始终确认」需弹确认（与面板清空共用同一策略）
+    func testClearConfirmationPolicy() {
+        XCTAssertFalse(SettingsStore.needsConfirmation(itemCount: 3, threshold: 3), "恰好等于阈值应直接清空")
+        XCTAssertFalse(SettingsStore.needsConfirmation(itemCount: 1, threshold: 3), "小于阈值应直接清空")
+        XCTAssertTrue(SettingsStore.needsConfirmation(itemCount: 4, threshold: 3), "大于阈值应确认")
+        XCTAssertTrue(
+            SettingsStore.needsConfirmation(itemCount: 5, threshold: SettingsStore.alwaysConfirmThreshold),
+            "始终确认（阈值 0）时任何数量都应确认"
+        )
+        XCTAssertTrue(
+            SettingsStore.needsConfirmation(itemCount: 0, threshold: SettingsStore.alwaysConfirmThreshold),
+            "始终确认（阈值 0）时 0 条也按确认策略处理（调用方已 guard count > 0）"
+        )
+    }
+
+    // MARK: - 关于信息（V2-3）
+
+    /// 版本号读取：测试宿主下 Bundle.main 是测试 runner 的 Info.plist，读不到 app 版本，
+    /// 故验证可注入的纯函数版本（AppInfo.version(from:) 默认读 Bundle.main）。
+    func testAppInfoVersion() {
+        XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": "0.1.0"]), "0.1.0")
+        XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": "2.0.3"]), "2.0.3")
+        XCTAssertEqual(AppInfo.version(from: [:]), "0.1.0", "缺失版本号应回退默认")
+        XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": ""]), "0.1.0", "空版本号应回退默认")
+    }
+
+    func testAppInfoRepoURL() {
+        XCTAssertEqual(AppInfo.repoURL.absoluteString, "https://github.com/leotoli/FileTmpShelf")
+    }
 }

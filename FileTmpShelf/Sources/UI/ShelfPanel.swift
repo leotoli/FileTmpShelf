@@ -50,8 +50,7 @@ final class ShelfPanelController: NSObject {
             let count = await store.count
             guard count > 0 else { return }
 
-            let threshold = settings.clearThreshold
-            if threshold == SettingsStore.alwaysConfirmThreshold || count > threshold {
+            if SettingsStore.needsConfirmation(itemCount: count, threshold: settings.clearThreshold) {
                 let alert = NSAlert()
                 alert.messageText = "确定清空货架？"
                 alert.informativeText = "将移除 \(count) 个货架条目（仅移除引用，不会删除任何源文件）。"
@@ -233,9 +232,28 @@ final class ShelfPanelModel: ObservableObject {
     private let store: ShelfStore
     /// 条目数变化回调（菜单栏角标，体验增强 3.4）
     var onItemsChange: ((Int) -> Void)?
+    private var clearAllObserver: NSObjectProtocol?
 
     init(store: ShelfStore) {
         self.store = store
+        // 设置页「清除所有货架」后重载，保证面板与磁盘数据一致（V2-3）
+        clearAllObserver = NotificationCenter.default.addObserver(
+            forName: .shelfDidClearAll,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.reload()
+        }
+        Task { await load() }
+    }
+
+    deinit {
+        if let clearAllObserver {
+            NotificationCenter.default.removeObserver(clearAllObserver)
+        }
+    }
+
+    private func reload() {
         Task { await load() }
     }
 

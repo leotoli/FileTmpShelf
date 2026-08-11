@@ -113,6 +113,12 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// 清空确认策略（V1 面板清空 / V2 设置页「清除所有货架」共用）：
+    /// 阈值 = 0（始终确认）或条目数 > 阈值 → 需弹确认；否则直接执行。
+    static func needsConfirmation(itemCount: Int, threshold: Int) -> Bool {
+        threshold == alwaysConfirmThreshold || itemCount > threshold
+    }
+
     // MARK: - 校验（非法值回退默认）
 
     private static func sanitizedKeyCode(_ raw: Int?) -> UInt32 {

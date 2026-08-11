@@ -261,4 +261,28 @@ final class ShelfStoreTests: XCTestCase {
         let count = await store.count
         XCTAssertEqual(count, 1, "无失效条目时不应误删")
     }
+
+    // MARK: - 设置页「清除所有货架」（V2-3）
+
+    /// 设置页流程：独立 ShelfStore 实例需先 load() 才能看到已落盘的条目；
+    /// removeAll 后货架空且源文件完好（零拷贝模型验证）
+    func testFreshStoreLoadThenRemoveAllKeepsSourceFiles() async throws {
+        let storeURL = tempDir.appendingPathComponent("shelf-settings-clear.json")
+        let writer = ShelfStore(storageURL: storeURL)
+        let file1 = try makeTestFile(named: "settings1.txt")
+        let file2 = try makeTestFile(named: "settings2.txt")
+        _ = await writer.addBatch([file1, file2])
+
+        let settingsStore = ShelfStore(storageURL: storeURL)
+        await settingsStore.load()
+        let loadedCount = await settingsStore.count
+        XCTAssertEqual(loadedCount, 2, "设置页的独立 store 应先 load() 才能读到已落盘条目")
+
+        await settingsStore.removeAll()
+        let after = await settingsStore.all()
+        XCTAssertEqual(after.count, 0, "清除后货架应为空")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file1.path), "清除不得删除源文件")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file2.path), "清除不得删除源文件")
+        XCTAssertEqual(try Data(contentsOf: file1), Data("hello".utf8), "源文件内容不受影响")
+    }
 }

@@ -173,3 +173,9 @@ actor ShelfStore {
         }
     }
 }
+
+extension Notification.Name {
+    /// 设置页「清除所有货架」完成后广播；面板视图据此从磁盘重载，
+    /// 保证设置页清空后打开中的面板与磁盘数据一致。
+    static let shelfDidClearAll = Notification.Name("FileTmpShelf.shelfDidClearAll")
+}

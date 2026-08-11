@@ -145,7 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settingsWindow == nil {
             let content = NSHostingView(rootView: SettingsView())
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 480, height: 340),
+                contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
@@ -171,6 +171,7 @@ struct SettingsView: View {
     @State private var recordingMonitor: Any?
     @State private var hotKeyError: String?
     @State private var launchAtLoginError: String?
+    @State private var shelfStore = ShelfStore()
 
     var body: some View {
         Form {
@@ -237,6 +238,46 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Section("危险操作") {
+                Button(role: .destructive, action: clearAllShelves) {
+                    Label("清除所有货架", systemImage: "trash")
+                }
+                .help("移除货架上的全部条目")
+                Text("将移除货架上的全部条目。仅移除引用，不会删除任何源文件。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("关于 FileTmpShelf") {
+                HStack(spacing: 12) {
+                    Image(nsImage: NSApplication.shared.applicationIconImage)
+                        .resizable()
+                        .frame(width: 40, height: 40)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("FileTmpShelf")
+                            .font(.headline)
+                        Text("版本 \(AppInfo.version())")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                HStack {
+                    Text("GitHub 仓库")
+                    Spacer()
+                    Button {
+                        NSWorkspace.shared.open(AppInfo.repoURL)
+                    } label: {
+                        Text(AppInfo.repoURL.absoluteString)
+                    }
+                    .buttonStyle(.link)
+                    .help("在浏览器中打开 GitHub 仓库")
+                }
+                Text("基于 MIT 许可证开源发布，源码见 GitHub 仓库。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .frame(width: 460)
@@ -262,6 +303,31 @@ struct SettingsView: View {
                 }
             }
         )
+    }
+
+    // MARK: - 清除所有货架（V2-3）
+
+    /// 清除所有货架：复用清空确认阈值逻辑（≤阈值直接清空，>阈值或「始终确认」弹确认），
+    /// 确认后调用 ShelfStore.removeAll()。只移除引用，不删除源文件。
+    private func clearAllShelves() {
+        Task { @MainActor in
+            await shelfStore.load()
+            let count = await shelfStore.count
+            guard count > 0 else { return }
+
+            if SettingsStore.needsConfirmation(itemCount: count, threshold: store.clearThreshold) {
+                let alert = NSAlert()
+                alert.messageText = "确定清除所有货架？"
+                alert.informativeText = "将移除 \(count) 个条目（仅移除引用，不会删除任何源文件）。"
+                alert.addButton(withTitle: "清除")
+                alert.addButton(withTitle: "取消")
+                alert.alertStyle = .warning
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+            }
+
+            await shelfStore.removeAll()
+            NotificationCenter.default.post(name: .shelfDidClearAll, object: nil)
+        }
     }
 
     // MARK: - 快捷键录制
