@@ -211,4 +211,54 @@ final class ShelfStoreTests: XCTestCase {
         XCTAssertEqual(items.first?.displayName, "locked.txt")
         XCTAssertTrue(items.first?.isReachable ?? false)
     }
+
+    // MARK: - 体验增强（技术设计细化 2026-08-11）
+
+    /// 清空货架：只移除引用，源文件不受影响（零拷贝模型验证）
+    func testClearAllRemovesReferencesButKeepsSourceFiles() async throws {
+        let store = ShelfStore(storageURL: tempDir.appendingPathComponent("shelf-clear.json"))
+        let file = try makeTestFile(named: "keep-me.txt", content: "survive")
+        _ = await store.addBatch([file])
+
+        await store.removeAll()
+
+        let after = await store.all()
+        XCTAssertEqual(after.count, 0, "清空后货架应为空")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path), "清空不得删除源文件")
+        XCTAssertEqual(try Data(contentsOf: file), Data("survive".utf8), "源文件内容不受影响")
+    }
+
+    /// 清理失效：只移除不可达条目，可达条目保留
+    func testRemoveUnreachableOnlyRemovesDeadItems() async throws {
+        let store = ShelfStore(storageURL: tempDir.appendingPathComponent("shelf-cleanup.json"))
+        let alive = try makeTestFile(named: "alive.txt", content: "alive")
+        let dead = try makeTestFile(named: "dead.txt", content: "dead")
+        _ = await store.addBatch([alive, dead])
+
+        // 删除 dead 的源文件 → 该条目失效
+        try FileManager.default.removeItem(at: dead)
+        let deadCount = await store.unreachableCount()
+        XCTAssertEqual(deadCount, 1, "应检测到 1 个失效条目")
+
+        let removed = await store.removeUnreachable()
+        XCTAssertEqual(removed, 1, "应清理 1 个失效条目")
+
+        let after = await store.all()
+        XCTAssertEqual(after.count, 1, "可达条目应保留")
+        XCTAssertEqual(after.first?.displayName, "alive.txt")
+    }
+
+    /// 无失效条目时清理应返回 0 且不误删
+    func testRemoveUnreachableWithNoDeadItems() async throws {
+        let store = ShelfStore(storageURL: tempDir.appendingPathComponent("shelf-cleanup2.json"))
+        let alive = try makeTestFile(named: "alive2.txt", content: "alive2")
+        _ = await store.addBatch([alive])
+
+        let deadCount = await store.unreachableCount()
+        XCTAssertEqual(deadCount, 0)
+        let removed = await store.removeUnreachable()
+        XCTAssertEqual(removed, 0)
+        let count = await store.count
+        XCTAssertEqual(count, 1, "无失效条目时不应误删")
+    }
 }

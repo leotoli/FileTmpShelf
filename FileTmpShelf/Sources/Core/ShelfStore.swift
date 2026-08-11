@@ -134,6 +134,21 @@ actor ShelfStore {
         persist()
     }
 
+    /// 清理失效条目（源文件已删除/移动/不可达），返回被清理的数量。
+    /// 体验增强 3.2：一键清理失效引用，无数据风险（只移除引用不碰文件）。
+    @discardableResult
+    func removeUnreachable() -> Int {
+        let before = items.count
+        items.removeAll { !$0.isReachable }
+        persist()
+        return before - items.count
+    }
+
+    /// 失效条目数量（供 UI 决定是否显示"清理失效"按钮）
+    func unreachableCount() -> Int {
+        items.filter { !$0.isReachable }.count
+    }
+
     /// 启动时恢复 + 失效检测（Spike S1：失效矩阵验证）
     func load() {
         guard let data = try? Data(contentsOf: storageURL),

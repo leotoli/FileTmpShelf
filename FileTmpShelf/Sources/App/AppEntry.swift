@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let menu = NSMenu()
         menu.addItem(withTitle: "显示/隐藏货架 (⌥C)", action: #selector(togglePanel), keyEquivalent: "")
+        menu.addItem(withTitle: "清空货架", action: #selector(clearShelf), keyEquivalent: "")
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "设置…", action: #selector(openSettings), keyEquivalent: ",")
         menu.addItem(withTitle: "退出", action: #selector(quit), keyEquivalent: "q")
@@ -36,6 +37,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 面板
         panelController = ShelfPanelController()
+        panelController?.onItemCountChange = { [weak self] count in
+            self?.updateBadge(count: count)
+        }
 
         // 全局热键：单元测试宿主环境下跳过，避免与测试自身的注册冲突
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
@@ -62,6 +66,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func togglePanel() {
         panelController?.toggle()
+    }
+
+    @objc private func clearShelf() {
+        guard let panelController else { return }
+        panelController.clearAllWithConfirmation()
+    }
+
+    /// 菜单栏角标：条目数 > 0 时显示数字（体验增强 3.4）
+    func updateBadge(count: Int) {
+        statusItem?.button?.title = count > 0 ? " \(count)" : ""
     }
 
     @objc private func openSettings() {

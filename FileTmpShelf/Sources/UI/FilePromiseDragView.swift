@@ -45,8 +45,16 @@ final class FilePromiseDragView: NSView {
         true
     }
 
+    /// 关键（体验缺陷 2.1 修复）：鼠标落在条目区域拖动时，事件应只用于发起文件拖拽，
+    /// 不允许窗口解释为"移动窗口"。面板移动保留给空白区域（isMovableByWindowBackground）。
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
+
     override func mouseDown(with event: NSEvent) {
         mouseDownLocation = event.locationInWindow
+        // 拖拽反馈（3.1）：按下即轻微压暗，拖拽会话结束后恢复
+        alphaValue = 0.85
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -105,6 +113,12 @@ extension FilePromiseDragView: NSDraggingSource {
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         hasDraggingSession = false
+        alphaValue = 1.0
+    }
+
+    func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
+        // 拖拽正式开始时压暗条目（与按下反馈连续）
+        alphaValue = 0.5
     }
 }
 
