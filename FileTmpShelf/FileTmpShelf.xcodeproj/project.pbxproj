@@ -12,6 +12,7 @@
 		674741E72C016208C6468037 /* HotKeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10127467ED0091A27C5F70EE /* HotKeyManager.swift */; };
 		7AE7C0A017A91DEB0E669F9F /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF572E60CE3601284F0010D8 /* SettingsStore.swift */; };
 		85CA99F9A8A1430F42FCA381 /* HotKeyManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38CEE07704E2657BC74F04DE /* HotKeyManagerTests.swift */; };
+		A6246BA65008393F91D0130D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0585069A996DF4E45FD85B5F /* Assets.xcassets */; };
 		B1B01A976FB8B3480325FC41 /* FilePromiseDragView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4641C63984C722768BA0A616 /* FilePromiseDragView.swift */; };
 		B6EE6CD264DBF04592921ACC /* ShelfPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A27EA80D449658D211B3FBA /* ShelfPanel.swift */; };
 		B7D2A747289FEA6B9E4F5E64 /* SettingsStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86EA82CB2075785C6A88CCA7 /* SettingsStoreTests.swift */; };
@@ -31,6 +32,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		0585069A996DF4E45FD85B5F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		10127467ED0091A27C5F70EE /* HotKeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotKeyManager.swift; sourceTree = "<group>"; };
 		23F5BF4565801A6475A6D3F0 /* FileTmpShelfTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FileTmpShelfTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2E57C8BCA0B32BA03206EBDD /* AppEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEntry.swift; sourceTree = "<group>"; };
@@ -72,6 +74,7 @@
 			children = (
 				36E08D82B096A2D3EFC9F8A5 /* Sources */,
 				48DF37B5ABFB6E34ADC382C3 /* Tests */,
+				0585069A996DF4E45FD85B5F /* Assets.xcassets */,
 				63E0ACD2CE7F9364313A8F9E /* Products */,
 			);
 			sourceTree = "<group>";
@@ -122,6 +125,7 @@
 			buildConfigurationList = DE7A85BACD8D9A20DB98D7BE /* Build configuration list for PBXNativeTarget "FileTmpShelf" */;
 			buildPhases = (
 				B153B27639AEE788FBE2908D /* Sources */,
+				1331D188BC98C12EFFE55FD8 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -188,6 +192,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		1331D188BC98C12EFFE55FD8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A6246BA65008393F91D0130D /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		961851FF3DBE4DC27E87215A /* Sources */ = {
