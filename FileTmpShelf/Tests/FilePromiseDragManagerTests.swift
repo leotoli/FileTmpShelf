@@ -47,6 +47,34 @@ final class FilePromiseDragManagerTests: XCTestCase {
         case noResult
     }
 
+    /// 构造"强制跨卷"的 manager：volumeResolver 恒 true 模拟不同卷
+    /// （真实跨卷是不同卷 UUID；单测在同一文件系统，volumeIdentifier 相同，需注入模拟）。
+    private func makeCrossVolumeManager(
+        item: ShelfItem,
+        copyVerifier: ((URL, URL) -> Bool)? = nil,
+        onMoveCompleted: @escaping (ShelfItem) -> Void = { _ in }
+    ) -> FilePromiseDragManager {
+        FilePromiseDragManager(
+            item: item,
+            onMoveCompleted: onMoveCompleted,
+            volumeResolver: { _, _ in true },
+            copyVerifier: copyVerifier
+        )
+    }
+
+    /// 构造目录条目（含嵌套子目录，验证递归条目数校验）
+    private func makeDirectoryItem(named name: String) throws -> (ShelfItem, URL) {
+        let dir = tempDir.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("inner".utf8).write(to: dir.appendingPathComponent("inner.txt"))
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("sub", isDirectory: true), withIntermediateDirectories: true)
+        try Data("deep".utf8).write(to: dir.appendingPathComponent("sub", isDirectory: true).appendingPathComponent("deep.txt"))
+        guard let item = ShelfItem.make(from: dir) else {
+            throw XCTSkip("无法构造目录 ShelfItem")
+        }
+        return (item, dir)
+    }
+
     // MARK: - 成功路径
 
     /// 移动成功：源文件消失、目标文件存在且内容一致
@@ -165,6 +193,194 @@ final class FilePromiseDragManagerTests: XCTestCase {
         }
         XCTAssertEqual(notifyCount, 0, "权限拒绝时不得触发货架移除回调")
         XCTAssertTrue(FileManager.default.fileExists(atPath: source.path), "权限拒绝时源文件必须保留（数据零丢失）")
+    }
+
+    // MARK: - V2-5 跨卷路径
+
+    /// 同卷路径不变：volumeResolver 恒 false 强制同卷，copyVerifier 恒 false 做哨兵——
+    /// 若误入跨卷复制路径，校验必失败，测试即失败；同卷应直接原子 moveItem 成功。
+    func testSameVolumePathUsesAtomicMove() throws {
+        let (item, source) = try makeItem(named: "samevol.txt", content: "atomic")
+        let destDir = tempDir.appendingPathComponent("samevol-dest", isDirectory: true)
+        try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+        let dest = destDir.appendingPathComponent("samevol.txt")
+
+        let manager = FilePromiseDragManager(
+            item: item,
+            onMoveCompleted: { _ in },
+            volumeResolver: { _, _ in false },
+            copyVerifier: { _, _ in false }
+        )
+        let result = moveAndNotify(manager, to: dest)
+
+        XCTAssertNoThrow(try result.get(), "同卷应走原子 moveItem 成功（不经 copy/verify）")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path), "移动成功后源应消失")
+        XCTAssertEqual(try Data(contentsOf: dest), Data("atomic".utf8), "目标内容应与源一致")
+    }
+
+    /// 跨卷成功：copyItem → 真实校验（文件大小一致）→ 删除源 → completionHandler(nil) + 货架移除回调
+    func testCrossVolumeSuccessCopiesVerifiesAndDeletesSource() throws {
+        let (item, source) = try makeItem(named: "cross.txt", content: "cross-payload")
+        let destDir = tempDir.appendingPathComponent("cross-dest", isDirectory: true)
+        try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+        let dest = destDir.appendingPathComponent("cross.txt")
+
+        let notifyExp = expectation(description: "跨卷成功触发货架移除回调")
+        let manager = makeCrossVolumeManager(item: item, onMoveCompleted: { _ in notifyExp.fulfill() })
+        let result = moveAndNotify(manager, to: dest)
+
+        XCTAssertNoThrow(try result.get(), "跨卷移动成功应回调 nil")
+        wait(for: [notifyExp], timeout: 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path), "校验通过后源应被删除")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dest.path), "目标应存在")
+        XCTAssertEqual(try Data(contentsOf: dest), Data("cross-payload".utf8), "目标内容应与源一致")
+    }
+
+    /// 跨卷校验失败：源保留（数据零丢失）+ 不完整目标被清理 + completionHandler(error) + 不触发移除回调
+    func testCrossVolumeVerificationFailureKeepsSourceAndCleansDestination() throws {
+        let (item, source) = try makeItem(named: "verify-fail.txt", content: "must-keep")
+        let destDir = tempDir.appendingPathComponent("verify-fail-dest", isDirectory: true)
+        try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+        let dest = destDir.appendingPathComponent("verify-fail.txt")
+
+        var notifyCount = 0
+        // copyVerifier 恒 false：模拟"复制完成后校验发现目标不完整"
+        let manager = makeCrossVolumeManager(
+            item: item,
+            copyVerifier: { _, _ in false },
+            onMoveCompleted: { _ in notifyCount += 1 }
+        )
+        let result = moveAndNotify(manager, to: dest)
+
+        guard case .failure(let error) = result else {
+            return XCTFail("校验失败应返回 error")
+        }
+        XCTAssertTrue(error is FilePromiseDragManager.FilePromiseMoveError, "应返回跨卷移动错误类型，实际: \(error)")
+        XCTAssertEqual(notifyCount, 0, "校验失败不得触发货架移除回调（条目回滚保留）")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path), "校验失败必须保留源（数据零丢失）")
+        XCTAssertEqual(try Data(contentsOf: source), Data("must-keep".utf8), "失败时源内容必须完好")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dest.path), "不完整目标应被尽力清理")
+    }
+
+    /// 跨卷复制失败（目标父目录不存在）：源保留 + 目标无残留 + completionHandler(error)
+    func testCrossVolumeCopyFailureKeepsSource() throws {
+        let (item, source) = try makeItem(named: "copy-fail.txt", content: "safe")
+        let dest = tempDir.appendingPathComponent("no-such-dir", isDirectory: true)
+            .appendingPathComponent("copy-fail.txt")
+
+        var notifyCount = 0
+        let manager = makeCrossVolumeManager(item: item) { _ in notifyCount += 1 }
+        let result = moveAndNotify(manager, to: dest)
+
+        guard case .failure = result else {
+            return XCTFail("目标父目录不存在，跨卷复制应失败")
+        }
+        XCTAssertEqual(notifyCount, 0, "复制失败不得触发货架移除回调")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path), "复制失败源必须保留（数据零丢失）")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dest.path), "复制失败目标不应残留")
+    }
+
+    /// 目录跨卷成功：真实校验按"递归条目数一致"通过 → 删源，目录树完整迁移
+    func testCrossVolumeDirectorySuccessVerifiesItemCount() throws {
+        let (item, dir) = try makeDirectoryItem(named: "bundle-cross")
+        let dest = tempDir.appendingPathComponent("bundle-cross-moved", isDirectory: true)
+
+        let manager = makeCrossVolumeManager(item: item)
+        let result = moveAndNotify(manager, to: dest)
+
+        XCTAssertNoThrow(try result.get(), "目录跨卷复制+校验应成功")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path), "校验通过后目录源应被删除")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dest.appendingPathComponent("inner.txt").path), "目录树应完整迁移")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dest.appendingPathComponent("sub", isDirectory: true).appendingPathComponent("deep.txt").path))
+    }
+
+    /// 目录跨卷校验失败（注入假校验）：源保留 + 不完整目录目标被清理 + error
+    func testCrossVolumeDirectoryVerificationFailureKeepsSource() throws {
+        let (item, dir) = try makeDirectoryItem(named: "bundle-verify-fail")
+        let dest = tempDir.appendingPathComponent("bundle-verify-fail-moved", isDirectory: true)
+
+        var notifyCount = 0
+        let manager = makeCrossVolumeManager(
+            item: item,
+            copyVerifier: { _, _ in false },
+            onMoveCompleted: { _ in notifyCount += 1 }
+        )
+        let result = moveAndNotify(manager, to: dest)
+
+        guard case .failure = result else {
+            return XCTFail("目录校验失败应返回 error")
+        }
+        XCTAssertEqual(notifyCount, 0, "目录校验失败不得触发货架移除回调")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.path), "目录校验失败源必须保留（数据零丢失）")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dest.path), "不完整目录目标应被清理")
+    }
+
+    /// 真实卷判定（不注入 volumeResolver）：同一临时目录内移动应被 `volumeIdentifier`
+    /// 判为同卷 → 走原子 moveItem；copyVerifier 哨兵恒 false，若误判为跨卷必失败。
+    func testRealVolumeDetectionTreatsTempDirAsSameVolume() throws {
+        let (item, source) = try makeItem(named: "realvol.txt", content: "same-disk")
+        let destDir = tempDir.appendingPathComponent("realvol-dest", isDirectory: true)
+        try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+        let dest = destDir.appendingPathComponent("realvol.txt")
+
+        let manager = FilePromiseDragManager(
+            item: item,
+            onMoveCompleted: { _ in },
+            copyVerifier: { _, _ in false }
+        )
+        let result = moveAndNotify(manager, to: dest)
+
+        XCTAssertNoThrow(try result.get(), "同盘移动应判同卷并成功（未走跨卷复制）")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path), "移动成功后源应消失")
+        XCTAssertEqual(try Data(contentsOf: dest), Data("same-disk".utf8), "目标内容应与源一致")
+    }
+
+    // MARK: - V2-5 校验逻辑（verifyCopy 直测）
+
+    /// 文件校验：目标缺失 -> 失败；大小一致 -> 通过；大小不一致（模拟复制中断残留）-> 失败
+    func testVerifyCopyFileBySize() throws {
+        let src = tempDir.appendingPathComponent("v-src.bin")
+        let dst = tempDir.appendingPathComponent("v-dst.bin")
+        try Data(repeating: 0xAB, count: 4096).write(to: src)
+
+        let (dummy, _) = try makeItem(named: "x.txt")
+        let manager = FilePromiseDragManager(item: dummy) { _ in }
+
+        XCTAssertFalse(
+            manager.verifyCopy(source: src, destination: tempDir.appendingPathComponent("missing.bin")),
+            "目标缺失应判校验失败"
+        )
+
+        try Data(repeating: 0xAB, count: 4096).write(to: dst)
+        XCTAssertTrue(manager.verifyCopy(source: src, destination: dst), "大小一致应判通过")
+
+        try Data(repeating: 0xAB, count: 4095).write(to: dst, options: .atomic)
+        XCTAssertFalse(manager.verifyCopy(source: src, destination: dst), "大小不一致应判校验失败")
+    }
+
+    /// 目录校验：递归条目数一致 -> 通过；目标缺条目（模拟复制中断）-> 失败；目标缺失 -> 失败
+    func testVerifyCopyDirectoryByItemCount() throws {
+        let srcDir = tempDir.appendingPathComponent("vdir-src", isDirectory: true)
+        let dstDir = tempDir.appendingPathComponent("vdir-dst", isDirectory: true)
+        try FileManager.default.createDirectory(at: srcDir, withIntermediateDirectories: true)
+        try Data("a".utf8).write(to: srcDir.appendingPathComponent("a.txt"))
+        try FileManager.default.createDirectory(at: srcDir.appendingPathComponent("sub", isDirectory: true), withIntermediateDirectories: true)
+        try Data("b".utf8).write(to: srcDir.appendingPathComponent("sub", isDirectory: true).appendingPathComponent("b.txt"))
+
+        let (dummy, _) = try makeItem(named: "x.txt")
+        let manager = FilePromiseDragManager(item: dummy) { _ in }
+
+        try FileManager.default.copyItem(at: srcDir, to: dstDir)
+        XCTAssertTrue(manager.verifyCopy(source: srcDir, destination: dstDir), "完整复制条目数一致应判通过")
+
+        // 模拟复制中断：目标缺失 sub/b.txt（条目数不一致）
+        try FileManager.default.removeItem(at: dstDir.appendingPathComponent("sub", isDirectory: true).appendingPathComponent("b.txt"))
+        XCTAssertFalse(manager.verifyCopy(source: srcDir, destination: dstDir), "目标缺条目应判校验失败")
+
+        XCTAssertFalse(
+            manager.verifyCopy(source: srcDir, destination: tempDir.appendingPathComponent("no-vdir-dst", isDirectory: true)),
+            "目标缺失应判校验失败"
+        )
     }
 
     // MARK: - provider 配置
