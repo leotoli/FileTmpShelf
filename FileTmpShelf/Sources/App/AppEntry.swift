@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var hotKeyManager: HotKeyManager?
     private var panelController: ShelfPanelController?
+    private var settingsWindow: NSWindow?
     private let settings = SettingsStore.shared
     private var settingsCancellable: AnyCancellable?
     private var lastHotKey: (keyCode: UInt32, modifiers: NSEvent.ModifierFlags)?
@@ -137,8 +138,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
+        // 修复：accessory 应用（无 Dock 图标）下 NSApp.sendAction("showSettingsWindow:")
+        // 无法路由到 SwiftUI Settings 场景，设置窗口从未被创建。
+        // 改为 AppDelegate 手动持有设置窗口（NSWindow + SettingsView），
+        // 保持系统设置窗口观感（标题栏/可关闭），与 Settings 场景并存。
+        if settingsWindow == nil {
+            let content = NSHostingView(rootView: SettingsView())
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 480, height: 340),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "FileTmpShelf 设置"
+            window.contentView = content
+            window.center()
+            settingsWindow = window
+        }
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func quit() {
