@@ -8,13 +8,17 @@ final class ShelfPanelController: NSObject {
     private var panel: NSPanel?
     private let store = ShelfStore()
     private let settings: SettingsStore
+    private let positionStore: PanelPositionStore
     private var panelOpacity: Double
+    /// 程序化定位时置 true，抑制 didMove 反算持久化（只保存用户真实拖动结果）
+    private var suppressPositionSave = false
 
     /// 条目数变化回调（菜单栏角标用，体验增强 3.4）
     var onItemCountChange: ((Int) -> Void)?
 
-    init(settings: SettingsStore = SettingsStore.shared) {
+    init(settings: SettingsStore = SettingsStore.shared, positionStore: PanelPositionStore = PanelPositionStore()) {
         self.settings = settings
+        self.positionStore = positionStore
         self.panelOpacity = settings.panelOpacity
         super.init()
     }
@@ -35,7 +39,12 @@ final class ShelfPanelController: NSObject {
         if panel == nil {
             createPanel()
         }
-        panel?.orderFrontRegardless()
+        guard let panel else { return }
+        // V2-2 副屏唤醒：每次从隐藏→显示时按鼠标当前所在屏幕重新定位（相对锚点）
+        if !panel.isVisible {
+            placePanel(panel)
+        }
+        panel.orderFrontRegardless()
     }
 
     func hide() {
@@ -96,59 +105,65 @@ final class ShelfPanelController: NSObject {
         )
         newPanel.contentView = content
 
-        // 位置记忆（体验增强 3.3）：优先恢复上次位置；仅当存储的屏幕已不存在
-        // （显示器拔出/分辨率变化）时回退到主屏右上角。
-        if let saved = ShelfPanelController.savedFrame {
-            let onScreen = NSScreen.screens.contains { $0.frame.intersects(saved) }
-            if onScreen {
-                newPanel.setFrame(saved, display: false)
-            } else {
-                placeAtDefault(newPanel)
-            }
-        } else {
-            placeAtDefault(newPanel)
-        }
-
-        // 监听面板移动，持久化位置
+        // 位置在 show() 时按鼠标所在屏计算；此处仅监听移动。
+        // 用户拖动结束（didMove）反算「锚点+偏移」并持久化（V2-2 迁移到新模型）。
         NotificationCenter.default.addObserver(
             forName: NSWindow.didMoveNotification,
             object: newPanel,
             queue: .main
-        ) { [weak newPanel] _ in
-            guard let newPanel else { return }
-            ShelfPanelController.savedFrame = newPanel.frame
+        ) { [weak self, weak newPanel] _ in
+            guard let self, let newPanel, !self.suppressPositionSave else { return }
+            self.persistPosition(of: newPanel)
         }
 
         panel = newPanel
     }
 
-    private func placeAtDefault(_ panel: NSPanel) {
-        if let screen = NSScreen.main {
-            let frame = screen.visibleFrame
-            panel.setFrameOrigin(NSPoint(x: frame.maxX - 540, y: frame.maxY - 180))
-        }
+    /// V2-2 定位：确定目标屏（鼠标所在屏，边界/无鼠标主屏兜底）→ resolvedFrame 决策
+    /// （新模型锚点 / V1 旧绝对坐标 fallback / 默认锚点）。程序化 setFrame 期间抑制
+    /// didMove 保存，避免把「唤醒定位」误当用户拖动写入。
+    private func placePanel(_ panel: NSPanel) {
+        let target = targetVisibleFrame()
+        let frame = PanelPositioning.resolvedFrame(
+            panelSize: panel.frame.size,
+            targetVisibleFrame: target,
+            storedPosition: positionStore.position,
+            legacyFrame: positionStore.legacyFrame,
+            screenFrames: NSScreen.screens.map(\.frame)
+        )
+        suppressPositionSave = true
+        defer { suppressPositionSave = false }
+        panel.setFrame(frame, display: false)
     }
 
-    /// 持久化的面板位置（UserDefaults）
-    private static var savedFrame: NSRect? {
-        get {
-            guard let data = UserDefaults.standard.data(forKey: "panelFrame"),
-                  let rect = try? NSKeyedUnarchiver.unarchivedObject(ofClass: NSValue.self, from: data),
-                  rect.responds(to: #selector(getter: NSValue.rectValue)) else {
-                return nil
-            }
-            return rect.rectValue
+    /// 目标屏幕可见帧：鼠标所在屏；无鼠标/不在任何屏 → 主屏兜底。
+    private func targetVisibleFrame() -> NSRect {
+        let screens = NSScreen.screens
+        guard !screens.isEmpty else {
+            return NSRect(x: 0, y: 0, width: 2000, height: 1200)
         }
-        set {
-            guard let newValue else {
-                UserDefaults.standard.removeObject(forKey: "panelFrame")
-                return
-            }
-            let value = NSValue(rect: newValue)
-            if let data = try? NSKeyedArchiver.archivedData(withRootObject: value, requiringSecureCoding: false) {
-                UserDefaults.standard.set(data, forKey: "panelFrame")
-            }
+        let fallbackIndex = screens.firstIndex { $0 === NSScreen.main } ?? 0
+        let index = PanelPositioning.targetScreenIndex(
+            mouseLocation: NSEvent.mouseLocation,
+            screenFrames: screens.map(\.frame),
+            fallbackIndex: fallbackIndex
+        )
+        return screens[index].visibleFrame
+    }
+
+    /// 拖动结束：按面板当前所在屏的可见帧反算锚点+偏移并持久化（迁移到新模型）。
+    private func persistPosition(of panel: NSPanel) {
+        let frame = panel.frame
+        let center = NSPoint(x: frame.midX, y: frame.midY)
+        let visible: NSRect
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(center) }) {
+            visible = screen.visibleFrame
+        } else if let main = NSScreen.main {
+            visible = main.visibleFrame
+        } else {
+            visible = frame
         }
+        positionStore.save(from: frame, in: visible)
     }
 }
 
