@@ -1,11 +1,12 @@
 #!/usr/bin/env swift
 
 // generate-icon.swift — 用 CoreGraphics 生成 FileTmpShelf 全套 macOS 图标 PNG。
-// 设计（v2，苹果 Big Sur 风格）：
-//   - 背景：青→蓝→紫 斜向细腻渐变（squircle 由系统遮罩，图标全出血）
-//   - 符号：白色托盘（tray）+ 中央浮起一张"文件"卡片，右下角小折角
-//   - 细节：顶部柔光、托盘投影、微圆角端点
-// 用法：swift scripts/generate-icon.swift [输出目录（默认 FileTmpShelf/Assets.xcassets/AppIcon.appiconset）]
+// 设计（v3，macOS 26 Liquid Glass 玻璃风格）：
+//   - 背景：通透的青→蓝渐变，带大范围柔和光晕（模拟玻璃透光）
+//   - 主元素：半透明"玻璃托盘"，上缘高光描边，内凹底有光反射
+//   - 中央：一张半透明玻璃文档卡片（无小圆点，保持简洁）
+//   - 细节：边缘 1px 亮边、顶部/侧面反光带、底部柔和投影
+// 用法：swift scripts/generate-icon.swift [输出目录]
 // 可重复运行，幂等。
 
 import Foundation
@@ -38,45 +39,10 @@ func roundedRectPath(_ rect: CGRect, radius r: CGFloat) -> CGPath {
     CGPath(roundedRect: rect, cornerWidth: r, cornerHeight: r, transform: nil)
 }
 
-// 连续曲率 squircle 的近似路径（用 4 段二次贝塞尔模拟 iOS/macOS 图标圆角）
-func squirclePath(_ rect: CGRect) -> CGPath {
-    let path = CGMutablePath()
-    let r = rect.width * 0.2237   // Big Sur 图标圆角近似比例
-    let w = rect.width
-    let h = rect.height
-    // 控制点系数（squircle 近似）
-    let k: CGFloat = 0.5578
-    let cx = rect.minX, cy = rect.minY
-
-    path.move(to: CGPoint(x: cx + r, y: cy))
-    path.addLine(to: CGPoint(x: cx + w - r, y: cy))
-    path.addQuadCurve(
-        to: CGPoint(x: cx + w, y: cy + r),
-        control: CGPoint(x: cx + w - r * (1 - k), y: cy + r * k)
-    )
-    path.addLine(to: CGPoint(x: cx + w, y: cy + h - r))
-    path.addQuadCurve(
-        to: CGPoint(x: cx + w - r, y: cy + h),
-        control: CGPoint(x: cx + w - r * k, y: cy + h - r * (1 - k))
-    )
-    path.addLine(to: CGPoint(x: cx + r, y: cy + h))
-    path.addQuadCurve(
-        to: CGPoint(x: cx, y: cy + h - r),
-        control: CGPoint(x: cx + r * (1 - k), y: cy + h - r * k)
-    )
-    path.addLine(to: CGPoint(x: cx, y: cy + r))
-    path.addQuadCurve(
-        to: CGPoint(x: cx + r, y: cy),
-        control: CGPoint(x: cx + r * k, y: cy + r * (1 - k))
-    )
-    path.closeSubpath()
-    return path
-}
-
 func drawIcon(size: Int) -> CGImage {
     let px = size
-    let S = CGFloat(px)   // 画布边长
-    let u = S / 1024.0    // 缩放系数（1024 设计稿基准）
+    let S = CGFloat(px)
+    let u = S / 1024.0
 
     let ctx = CGContext(
         data: nil, width: px, height: px,
@@ -85,13 +51,13 @@ func drawIcon(size: Int) -> CGImage {
         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
     )!
 
-    // 1. 背景斜向渐变（青 → 蓝 → 紫，视觉更现代）
+    // 1. 背景：通透青蓝渐变（玻璃透光感）
     let bgColors = [
-        rgba(0.18, 0.62, 0.98),   // 顶部青蓝
-        rgba(0.28, 0.42, 0.95),   // 中部蓝
-        rgba(0.45, 0.28, 0.92)    // 底部紫
+        rgba(0.35, 0.78, 0.98),   // 顶部亮青
+        rgba(0.30, 0.58, 0.97),   // 中部蓝
+        rgba(0.55, 0.38, 0.95)    // 底部紫
     ] as CFArray
-    let bgGrad = CGGradient(colorsSpace: sRGB, colors: bgColors, locations: [0, 0.55, 1])!
+    let bgGrad = CGGradient(colorsSpace: sRGB, colors: bgColors, locations: [0, 0.5, 1])!
     ctx.drawLinearGradient(
         bgGrad,
         start: CGPoint(x: 0, y: S),
@@ -99,88 +65,110 @@ func drawIcon(size: Int) -> CGImage {
         options: []
     )
 
-    // 2. 顶部柔光（径向，位置偏高，更含蓄）
-    let glossColors = [rgba(1, 1, 1, 0.20), rgba(1, 1, 1, 0.0)] as CFArray
-    let gloss = CGGradient(colorsSpace: sRGB, colors: glossColors, locations: [0, 1])!
+    // 2. 大范围光晕（左上角主光源，玻璃反光）
+    let glowColors = [rgba(1, 1, 1, 0.30), rgba(1, 1, 1, 0.0)] as CFArray
+    let glow = CGGradient(colorsSpace: sRGB, colors: glowColors, locations: [0, 1])!
     ctx.drawRadialGradient(
-        gloss,
-        startCenter: CGPoint(x: S * 0.5, y: S * 0.92), startRadius: 0,
-        endCenter: CGPoint(x: S * 0.5, y: S * 0.92), endRadius: S * 0.75,
+        glow,
+        startCenter: CGPoint(x: S * 0.30, y: S * 0.85), startRadius: 0,
+        endCenter: CGPoint(x: S * 0.30, y: S * 0.85), endRadius: S * 0.85,
         options: []
     )
 
-    // 3. 底部细微暗角（增加层次）
-    let shadeColors = [rgba(0, 0, 0, 0.0), rgba(0, 0, 0, 0.12)] as CFArray
-    let shade = CGGradient(colorsSpace: sRGB, colors: shadeColors, locations: [0, 1])!
-    ctx.drawRadialGradient(
-        shade,
-        startCenter: CGPoint(x: S * 0.5, y: S * 0.15), startRadius: S * 0.2,
-        endCenter: CGPoint(x: S * 0.5, y: S * 0.15), endRadius: S * 0.95,
-        options: []
-    )
-
-    // 4. 托盘投影
+    // 3. 底部柔和投影（托盘）
     ctx.setShadow(
-        offset: CGSize(width: 0, height: -10 * u),
-        blur: 28 * u,
-        color: rgba(0, 0, 0, 0.35)
+        offset: CGSize(width: 0, height: -14 * u),
+        blur: 40 * u,
+        color: rgba(0.05, 0.10, 0.40, 0.40)
     )
 
-    // 5. 托盘主体（白色，圆角，中空感：外框 + 内凹底）
-    ctx.setFillColor(rgba(1, 1, 1, 0.96))
-    ctx.addPath(roundedRectPath(CGRect(x: 212 * u, y: 332 * u, width: 600 * u, height: 380 * u), radius: 64 * u))
+    // 4. 玻璃托盘主体（半透明白 + 渐变 → 玻璃质感）
+    let trayRect = CGRect(x: 212 * u, y: 344 * u, width: 600 * u, height: 360 * u)
+    let trayPath = roundedRectPath(trayRect, radius: 72 * u)
+    ctx.saveGState()
+    ctx.addPath(trayPath)
+    ctx.clip()
+
+    // 4a. 托盘内渐变（顶部亮、底部略暗的玻璃）
+    let glassColors = [
+        rgba(1, 1, 1, 0.55),
+        rgba(1, 1, 1, 0.32),
+        rgba(1, 1, 1, 0.18)
+    ] as CFArray
+    let glass = CGGradient(colorsSpace: sRGB, colors: glassColors, locations: [0, 0.55, 1])!
+    ctx.drawLinearGradient(
+        glass,
+        start: CGPoint(x: trayRect.midX, y: trayRect.maxY),
+        end: CGPoint(x: trayRect.midX, y: trayRect.minY),
+        options: []
+    )
+
+    // 4b. 托盘内壁斜向反光（左上光源）
+    let innerGlow = CGGradient(colorsSpace: sRGB, colors: [rgba(1, 1, 1, 0.45), rgba(1, 1, 1, 0.0)] as CFArray, locations: [0, 1])!
+    ctx.drawRadialGradient(
+        innerGlow,
+        startCenter: CGPoint(x: trayRect.minX + 80 * u, y: trayRect.maxY - 60 * u), startRadius: 0,
+        endCenter: CGPoint(x: trayRect.minX + 80 * u, y: trayRect.maxY - 60 * u), endRadius: 260 * u,
+        options: []
+    )
+    ctx.restoreGState()
+
+    // 4c. 托盘上缘高光（液态玻璃边缘亮线）
+    ctx.setStrokeColor(rgba(1, 1, 1, 0.85))
+    ctx.setLineWidth(10 * u)
+    ctx.addPath(roundedRectPath(trayRect.insetBy(dx: 5 * u, dy: 5 * u), radius: 66 * u))
+    ctx.strokePath()
+
+    // 5. 中央玻璃文档卡片（半透明，浮起）
+    let cardRect = CGRect(x: 377 * u, y: 206 * u, width: 270 * u, height: 318 * u)
+    let cardPath = roundedRectPath(cardRect, radius: 40 * u)
+    ctx.saveGState()
+    ctx.setShadow(offset: CGSize(width: 0, height: -8 * u), blur: 20 * u, color: rgba(0.05, 0.10, 0.40, 0.35))
+    ctx.addPath(cardPath)
     ctx.fillPath()
 
-    // 6. 托盘内底（半透明白，模拟凹陷）
-    ctx.setFillColor(rgba(0.30, 0.45, 0.90, 0.20))
-    ctx.addPath(roundedRectPath(CGRect(x: 244 * u, y: 366 * u, width: 536 * u, height: 316 * u), radius: 44 * u))
-    ctx.fillPath()
+    // 5a. 卡片玻璃渐变
+    ctx.addPath(cardPath)
+    ctx.clip()
+    let cardGlass = CGGradient(colorsSpace: sRGB, colors: [rgba(1, 1, 1, 0.62), rgba(1, 1, 1, 0.28)] as CFArray, locations: [0, 1])!
+    ctx.drawLinearGradient(
+        cardGlass,
+        start: CGPoint(x: cardRect.minX, y: cardRect.maxY),
+        end: CGPoint(x: cardRect.maxX, y: cardRect.minY),
+        options: []
+    )
+    ctx.restoreGState()
 
-    // 7. 顶部"文件"卡片（浮起，有折角）
-    ctx.setShadow(offset: CGSize(width: 0, height: -6 * u), blur: 16 * u, color: rgba(0, 0, 0, 0.28))
-    let cardRect = CGRect(x: 372 * u, y: 208 * u, width: 280 * u, height: 330 * u)
-    ctx.setFillColor(rgba(1, 1, 1, 0.97))
-    ctx.addPath(roundedRectPath(cardRect, radius: 36 * u))
-    ctx.fillPath()
+    // 5b. 卡片上缘高光
+    ctx.setStrokeColor(rgba(1, 1, 1, 0.90))
+    ctx.setLineWidth(8 * u)
+    ctx.addPath(roundedRectPath(cardRect.insetBy(dx: 4 * u, dy: 4 * u), radius: 36 * u))
+    ctx.strokePath()
 
-    // 卡片折角（右下角小三角）
-    let fold = CGMutablePath()
-    let fw = 96 * u
-    fold.move(to: CGPoint(x: cardRect.maxX - fw, y: cardRect.maxY))
-    fold.addLine(to: CGPoint(x: cardRect.maxX, y: cardRect.maxY - fw))
-    fold.addLine(to: CGPoint(x: cardRect.maxX, y: cardRect.maxY))
-    fold.closeSubpath()
-    ctx.setFillColor(rgba(0.28, 0.42, 0.95, 0.55))
-    ctx.addPath(fold)
-    ctx.fillPath()
-
-    // 8. 卡片上的"文档线"（三道白色/浅色线条，代表文件内容）
-    ctx.setStrokeColor(rgba(0.30, 0.45, 0.90, 0.85))
-    ctx.setLineWidth(20 * u)
+    // 5c. 卡片内容线（三道半透明白线，代表文件内容；不用小圆点）
+    ctx.setStrokeColor(rgba(1, 1, 1, 0.75))
+    ctx.setLineWidth(18 * u)
     ctx.setLineCap(.round)
-    for (i, y) in [0.0, 1.0, 2.0].enumerated() {
-        let lineY = cardRect.minY + 88 * u + CGFloat(i) * 58 * u
-        ctx.move(to: CGPoint(x: cardRect.minX + 56 * u, y: lineY))
-        ctx.addLine(to: CGPoint(x: cardRect.maxX - (y == 2.0 ? 160.0 : 56.0) * u, y: lineY))
+    for i in 0..<3 {
+        let lineY = cardRect.minY + 84 * u + CGFloat(i) * 56 * u
+        let lineMaxX = cardRect.maxX - (i == 2 ? 150.0 : 52.0) * u
+        ctx.move(to: CGPoint(x: cardRect.minX + 52 * u, y: lineY))
+        ctx.addLine(to: CGPoint(x: lineMaxX, y: lineY))
         ctx.strokePath()
     }
 
-    // 9. 托盘内三格分隔线（淡）
-    ctx.setStrokeColor(rgba(0.30, 0.45, 0.90, 0.35))
-    ctx.setLineWidth(8 * u)
-    ctx.setLineCap(.round)
-    for cx in [400.0, 624.0] {
-        ctx.move(to: CGPoint(x: cx * u, y: 380 * u))
-        ctx.addLine(to: CGPoint(x: cx * u, y: 668 * u))
-    }
-    ctx.strokePath()
-
-    // 10. 托盘内"小圆点"（每个格一个小圆，代表文件项）
-    ctx.setFillColor(rgba(0.30, 0.45, 0.90, 0.50))
-    for cx in [322.0, 512.0, 702.0] {
-        ctx.addPath(CGPath(ellipseIn: CGRect(x: (cx - 22) * u, y: 500 * u, width: 44 * u, height: 44 * u), transform: nil))
-        ctx.fillPath()
-    }
+    // 6. 托盘内底微弱反光带（玻璃透光底部）
+    ctx.saveGState()
+    ctx.addPath(roundedRectPath(CGRect(x: 250 * u, y: 372 * u, width: 524 * u, height: 296 * u), radius: 48 * u))
+    ctx.clip()
+    let bottomShine = CGGradient(colorsSpace: sRGB, colors: [rgba(1, 1, 1, 0.0), rgba(1, 1, 1, 0.22)] as CFArray, locations: [0, 1])!
+    ctx.drawLinearGradient(
+        bottomShine,
+        start: CGPoint(x: 0, y: 372 * u),
+        end: CGPoint(x: 0, y: 668 * u),
+        options: []
+    )
+    ctx.restoreGState()
 
     return ctx.makeImage()!
 }
