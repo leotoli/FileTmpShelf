@@ -82,7 +82,7 @@ final class ShelfPanelController: NSObject {
 
     private func createPanel() {
         let newPanel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 140),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 188),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -178,72 +178,183 @@ struct ShelfPanelView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            // 头部工具栏：条目数 + 清理失效 + 清空（体验缺陷 2.2 / 增强 3.2）
-            HStack {
-                Text("\(model.items.count) 个文件")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if model.hasUnreachable {
-                    Button {
-                        model.clearUnreachable()
-                    } label: {
-                        Image(systemName: "broom")
-                            .font(.system(size: 11))
-                    }
-                    .buttonStyle(.plain)
-                    .help("清理失效条目")
-                }
-                if !model.items.isEmpty {
-                    Button {
-                        model.clearAll()
-                    } label: {
-                        Image(systemName: "trash")
-                            .font(.system(size: 11))
-                    }
-                    .buttonStyle(.plain)
-                    .help("清空货架（仅移除引用，不删除源文件）")
-                }
-            }
-            .padding(.horizontal, 4)
-            .padding(.top, 2)
-
-            if model.items.isEmpty {
-                VStack(spacing: 6) {
-                    Image(systemName: "tray")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.secondary)
-                    Text("拖文件到这里，或按 ⌥X 呼出")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(model.items) { item in
-                            ShelfItemView(item: item) { moved in
-                                model.removeItem(moved)
-                            }
-                        }
-                    }
-                    .padding(10)
-                }
-            }
+            header
+            content
         }
         .padding(12)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .frame(width: 520, height: 160)
+        .frame(width: 520, height: 188)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             model.addDroppedFiles(providers)
             return true
         }
+    }
+
+    /// 头部工具栏：货架切换 + 货架管理 + 条目数 + 清理失效 + 清空（V2-4）
+    private var header: some View {
+        HStack(spacing: 6) {
+            shelfSwitcher
+            shelfManagementMenu
+            Spacer(minLength: 8)
+            Text("\(model.items.count) 个文件")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+            if model.hasUnreachable {
+                Button {
+                    model.clearUnreachable()
+                } label: {
+                    Image(systemName: "broom")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .help("清理失效条目")
+            }
+            if !model.items.isEmpty {
+                Button {
+                    model.clearAll()
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .help("清空货架（仅移除引用，不删除源文件）")
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 2)
+    }
+
+    /// 货架切换下拉：列出全部货架名称，点击切换当前货架
+    private var shelfSwitcher: some View {
+        Menu {
+            ForEach(model.shelves) { shelf in
+                Button {
+                    model.selectShelf(id: shelf.id)
+                } label: {
+                    if shelf.id == model.selectedShelfID {
+                        Label(shelf.name, systemImage: "checkmark")
+                    } else {
+                        Text(shelf.name)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "tray.full")
+                    .font(.system(size: 10))
+                Text(model.currentShelfName)
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    /// 货架管理入口：新建 / 重命名 / 删除（删除最后一个禁用）
+    private var shelfManagementMenu: some View {
+        Menu {
+            Button("新建货架…") { createShelf() }
+            Button("重命名当前货架…") { renameShelf() }
+            Divider()
+            Button("删除当前货架…", role: .destructive) { deleteShelf() }
+                .disabled(model.shelves.count <= 1)
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 11))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    /// 条目列表 / 空态
+    @ViewBuilder
+    private var content: some View {
+        if model.items.isEmpty {
+            VStack(spacing: 6) {
+                Image(systemName: "tray")
+                    .font(.system(size: 28))
+                    .foregroundStyle(.secondary)
+                Text("拖文件到这里，或按 ⌥X 呼出")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(model.items) { item in
+                        ShelfItemView(item: item) { moved in
+                            model.removeItem(moved)
+                        }
+                    }
+                }
+                .padding(10)
+            }
+        }
+    }
+
+    // MARK: - 货架管理操作（V2-4）
+
+    private func createShelf() {
+        guard let name = Self.promptText(
+            title: "新建货架",
+            message: "输入新货架名称：",
+            defaultText: "新货架"
+        ) else { return }
+        model.createShelf(named: name)
+    }
+
+    private func renameShelf() {
+        guard let name = Self.promptText(
+            title: "重命名货架",
+            message: "输入新的货架名称：",
+            defaultText: model.currentShelfName
+        ) else { return }
+        model.renameCurrentShelf(to: name)
+    }
+
+    private func deleteShelf() {
+        guard model.shelves.count > 1 else { return }
+        let alert = NSAlert()
+        alert.messageText = "删除货架「\(model.currentShelfName)」？"
+        alert.informativeText = "将删除该货架及其 \(model.items.count) 个条目引用（仅移除引用，不会删除任何源文件）。"
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        alert.alertStyle = .warning
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        model.deleteCurrentShelf()
+    }
+
+    /// 文本输入弹窗（新建/重命名共用）：确定返回输入文本（空名视为取消），取消返回 nil
+    @MainActor
+    private static func promptText(title: String, message: String?, defaultText: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        if let message {
+            alert.informativeText = message
+        }
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.stringValue = defaultText
+        alert.accessoryView = field
+        alert.addButton(withTitle: "确定")
+        alert.addButton(withTitle: "取消")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
     }
 }
 
 /// 面板视图模型
 final class ShelfPanelModel: ObservableObject {
     @Published private(set) var items: [ShelfItem] = []
+    @Published private(set) var shelves: [ShelfMeta] = []
+    @Published private(set) var currentShelfName: String = ""
+    @Published private(set) var selectedShelfID: UUID?
     private let store: ShelfStore
     /// 条目数变化回调（菜单栏角标，体验增强 3.4）
     var onItemsChange: ((Int) -> Void)?
@@ -278,6 +389,14 @@ final class ShelfPanelModel: ObservableObject {
 
     private func load() async {
         await store.load()
+        await refresh()
+    }
+
+    /// 从 store 同步全部展示状态（货架列表 / 当前货架 / 条目数）
+    private func refresh() async {
+        shelves = await store.shelves()
+        currentShelfName = await store.currentShelfName
+        selectedShelfID = await store.currentShelf()?.id
         items = await store.all()
         notifyCount()
     }
@@ -311,7 +430,7 @@ final class ShelfPanelModel: ObservableObject {
         items.contains { !$0.isReachable }
     }
 
-    /// 清空货架（体验缺陷 2.2）：移除全部引用，不删除源文件
+    /// 清空当前货架（体验缺陷 2.2）：移除全部引用，不删除源文件
     func clearAll() {
         Task {
             await store.removeAll()
@@ -326,6 +445,39 @@ final class ShelfPanelModel: ObservableObject {
             await store.removeUnreachable()
             items = await store.all()
             notifyCount()
+        }
+    }
+
+    // MARK: - 货架管理（V2-4）
+
+    func selectShelf(id: UUID) {
+        Task {
+            await store.selectShelf(id: id)
+            await refresh()
+        }
+    }
+
+    func createShelf(named name: String) {
+        Task {
+            await store.createShelf(name: name)
+            await refresh()
+        }
+    }
+
+    func renameCurrentShelf(to name: String) {
+        Task {
+            guard let current = await store.currentShelf() else { return }
+            await store.renameShelf(id: current.id, name: name)
+            shelves = await store.shelves()
+            currentShelfName = await store.currentShelfName
+        }
+    }
+
+    func deleteCurrentShelf() {
+        Task {
+            guard let current = await store.currentShelf() else { return }
+            await store.deleteShelf(id: current.id)
+            await refresh()
         }
     }
 

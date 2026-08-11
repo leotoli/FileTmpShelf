@@ -285,4 +285,184 @@ final class ShelfStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: file2.path), "清除不得删除源文件")
         XCTAssertEqual(try Data(contentsOf: file1), Data("hello".utf8), "源文件内容不受影响")
     }
+
+    // MARK: - 多货架（V2-4）
+
+    /// 构造一个多货架模式的 store（传目录路径），load() 后返回
+    private func makeMultiStore() async -> ShelfStore {
+        let baseDir = tempDir.appendingPathComponent("multi-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
+        let store = ShelfStore(storageURL: baseDir)
+        await store.load()
+        return store
+    }
+
+    /// 数据迁移：旧版 shelf.json（V1/V2-M1 单货架数据）首次启动自动迁移为「默认货架」，
+    /// 条目数一致；迁移成功后旧文件删除，新模型 shelf-<id>.json 存在；重启后数据保持。
+    func testLegacyShelfJsonMigratesToDefaultShelf() async throws {
+        let baseDir = tempDir.appendingPathComponent("migrate", isDirectory: true)
+        try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
+        let f1 = try makeTestFile(named: "mig1.txt", content: "mig1")
+        let f2 = try makeTestFile(named: "mig2.txt", content: "mig2")
+
+        // 旧版单文件模式写入 shelf.json（V1/V2-M1 存储格式）
+        let legacy = ShelfStore(storageURL: baseDir.appendingPathComponent("shelf.json"))
+        _ = await legacy.addBatch([f1, f2])
+
+        // 升级：多货架 store（传目录）
+        let upgraded = ShelfStore(storageURL: baseDir)
+        await upgraded.load()
+
+        let shelves = await upgraded.shelves()
+        XCTAssertEqual(shelves.count, 1, "迁移后应有 1 个默认货架")
+        XCTAssertEqual(shelves.first?.name, ShelfStore.defaultShelfName, "迁移后货架命名为「默认货架」")
+        let migratedCount = await upgraded.count
+        XCTAssertEqual(migratedCount, 2, "迁移后条目数应一致")
+        let migratedNames = await upgraded.all().map(\.displayName).sorted()
+        XCTAssertEqual(migratedNames, ["mig1.txt", "mig2.txt"])
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: baseDir.appendingPathComponent("shelf.json").path),
+            "迁移成功后旧 shelf.json 应删除"
+        )
+        let firstID = try XCTUnwrap(shelves.first?.id)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: baseDir.appendingPathComponent("shelf-\(firstID.uuidString).json").path),
+            "新模型 shelf-<id>.json 应存在"
+        )
+
+        // 重启保持：新 store 从新模型恢复，不再回退旧格式
+        let reloaded = ShelfStore(storageURL: baseDir)
+        await reloaded.load()
+        let reloadedName = await reloaded.shelves().first?.name
+        XCTAssertEqual(reloadedName, ShelfStore.defaultShelfName)
+        let reloadedCount = await reloaded.count
+        XCTAssertEqual(reloadedCount, 2)
+        let reloadedNames = await reloaded.all().map(\.displayName).sorted()
+        XCTAssertEqual(reloadedNames, ["mig1.txt", "mig2.txt"])
+    }
+
+    /// 多货架隔离：A 货架 addBatch 不影响 B；切换后各货架条目独立
+    func testMultiShelfIsolation() async throws {
+        let store = await makeMultiStore()
+        let current = await store.currentShelf()
+        let defaultID = try XCTUnwrap(current?.id)
+        let createdA = await store.createShelf(name: "项目A")
+        let shelfA = try XCTUnwrap(createdA)
+        let currentAfterCreate = await store.currentShelf()
+        XCTAssertEqual(currentAfterCreate?.name, "项目A", "新建货架应成为当前货架")
+
+        let fa = try makeTestFile(named: "iso-a.txt", content: "a")
+        _ = await store.addBatch([fa])
+        let countA = await store.count
+        XCTAssertEqual(countA, 1, "A 货架应有 1 条")
+
+        await store.selectShelf(id: defaultID)
+        let defaultCount = await store.count
+        XCTAssertEqual(defaultCount, 0, "默认货架不应受 A 货架影响")
+        let fb = try makeTestFile(named: "iso-b.txt", content: "b")
+        _ = await store.addBatch([fb])
+        let defaultCount2 = await store.count
+        XCTAssertEqual(defaultCount2, 1)
+
+        await store.selectShelf(id: shelfA)
+        let countA2 = await store.count
+        XCTAssertEqual(countA2, 1, "切回 A 仍只有自己的 1 条")
+        let namesInA = await store.all().map(\.displayName)
+        XCTAssertEqual(namesInA.first, "iso-a.txt")
+        XCTAssertFalse(namesInA.contains("iso-b.txt"), "B 的条目不应出现在 A")
+    }
+
+    /// 默认货架存在性保证：至少一个货架，不允许删除最后一个
+    func testCannotDeleteLastShelf() async throws {
+        let store = await makeMultiStore()
+        let currentShelf = await store.currentShelf()
+        let id = try XCTUnwrap(currentShelf?.id)
+        let shelfCount = await store.shelves().count
+        XCTAssertEqual(shelfCount, 1)
+
+        let deleted = await store.deleteShelf(id: id)
+        XCTAssertFalse(deleted, "最后一个货架不允许删除")
+        let after = await store.shelves().count
+        XCTAssertEqual(after, 1)
+        let currentAfter = await store.currentShelf()
+        XCTAssertEqual(currentAfter?.id, id, "删除被拒后当前货架不变")
+    }
+
+    /// 新建 / 重命名 / 删除货架（非最后一个）
+    func testCreateRenameDeleteShelf() async throws {
+        let store = await makeMultiStore()
+        let current = await store.currentShelf()
+        let defaultID = try XCTUnwrap(current?.id)
+
+        let createdNew = await store.createShelf(name: "  项目A  ")
+        let newID = try XCTUnwrap(createdNew)
+        let shelfCount = await store.shelves().count
+        XCTAssertEqual(shelfCount, 2)
+        let currentAfterCreate = await store.currentShelf()
+        XCTAssertEqual(currentAfterCreate?.name, "项目A", "名称应去除首尾空白")
+
+        await store.renameShelf(id: newID, name: "项目B")
+        let renamedMeta = await store.shelves().first(where: { $0.id == newID })
+        XCTAssertEqual(renamedMeta?.name, "项目B")
+        let currentAfterRename = await store.currentShelf()
+        XCTAssertEqual(currentAfterRename?.name, "项目B", "重命名当前货架后名称同步")
+
+        let deleted = await store.deleteShelf(id: newID)
+        XCTAssertTrue(deleted, "非最后一个货架应可删除")
+        let after = await store.shelves().count
+        XCTAssertEqual(after, 1)
+        let currentAfterDelete = await store.currentShelf()
+        XCTAssertEqual(currentAfterDelete?.id, defaultID, "删除当前货架后应回落到默认货架")
+    }
+
+    /// 设置页「清除所有货架」联动：遍历清空全部货架的条目，保留货架本身；源文件不受影响
+    func testClearAllShelvesClearsItemsButKeepsShelves() async throws {
+        let store = await makeMultiStore()
+        let current = await store.currentShelf()
+        let defaultID = try XCTUnwrap(current?.id)
+        let createdA = await store.createShelf(name: "项目A")
+        let shelfA = try XCTUnwrap(createdA)
+
+        let fa = try makeTestFile(named: "clear-a.txt", content: "a")
+        _ = await store.addBatch([fa])
+        await store.selectShelf(id: defaultID)
+        let fb = try makeTestFile(named: "clear-b.txt", content: "b")
+        _ = await store.addBatch([fb])
+        let totalBefore = await store.totalItemCount
+        XCTAssertEqual(totalBefore, 2, "两个货架共 2 条")
+
+        await store.clearAllShelves()
+
+        let shelfCountAfter = await store.shelves().count
+        XCTAssertEqual(shelfCountAfter, 2, "清空所有货架应保留货架本身")
+        let countNow = await store.count
+        XCTAssertEqual(countNow, 0)
+        await store.selectShelf(id: shelfA)
+        let countA = await store.count
+        XCTAssertEqual(countA, 0, "另一货架条目也应清空")
+        let totalAfter = await store.totalItemCount
+        XCTAssertEqual(totalAfter, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fa.path), "清空不得删除源文件")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fb.path), "清空不得删除源文件")
+    }
+
+    /// 空名新建回退默认名；空 registry 不存在时全新安装也保证至少一个默认货架
+    func testEmptyNameFallsBackToDefaultAndFreshInstallHasDefaultShelf() async throws {
+        let baseDir = tempDir.appendingPathComponent("fresh", isDirectory: true)
+        try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
+        let store = ShelfStore(storageURL: baseDir)
+        await store.load()
+
+        let shelfCount = await store.shelves().count
+        XCTAssertEqual(shelfCount, 1, "全新安装应创建默认货架")
+        let current = await store.currentShelf()
+        XCTAssertEqual(current?.name, ShelfStore.defaultShelfName)
+
+        let createdEmpty = await store.createShelf(name: "   ")
+        let id = try XCTUnwrap(createdEmpty)
+        let currentAfter = await store.currentShelf()
+        XCTAssertEqual(currentAfter?.id, id)
+        XCTAssertEqual(currentAfter?.name, ShelfStore.defaultShelfName, "空名应回退默认名")
+    }
 }

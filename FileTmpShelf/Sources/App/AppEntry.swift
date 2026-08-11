@@ -244,7 +244,7 @@ struct SettingsView: View {
                     Label("清除所有货架", systemImage: "trash")
                 }
                 .help("移除货架上的全部条目")
-                Text("将移除货架上的全部条目。仅移除引用，不会删除任何源文件。")
+                Text("将清空全部货架上的条目（保留货架本身）。仅移除引用，不会删除任何源文件。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -305,27 +305,28 @@ struct SettingsView: View {
         )
     }
 
-    // MARK: - 清除所有货架（V2-3）
+    // MARK: - 清除所有货架（V2-3 / V2-4 多货架遍历）
 
     /// 清除所有货架：复用清空确认阈值逻辑（≤阈值直接清空，>阈值或「始终确认」弹确认），
-    /// 确认后调用 ShelfStore.removeAll()。只移除引用，不删除源文件。
+    /// 确认后调用 ShelfStore.clearAllShelves()（多货架遍历清空全部货架的条目，保留货架本身）。
+    /// 只移除引用，不删除源文件。
     private func clearAllShelves() {
         Task { @MainActor in
             await shelfStore.load()
-            let count = await shelfStore.count
+            let count = await shelfStore.totalItemCount
             guard count > 0 else { return }
 
             if SettingsStore.needsConfirmation(itemCount: count, threshold: store.clearThreshold) {
                 let alert = NSAlert()
                 alert.messageText = "确定清除所有货架？"
-                alert.informativeText = "将移除 \(count) 个条目（仅移除引用，不会删除任何源文件）。"
+                alert.informativeText = "将移除全部货架共 \(count) 个条目（仅移除引用，不会删除任何源文件）。"
                 alert.addButton(withTitle: "清除")
                 alert.addButton(withTitle: "取消")
                 alert.alertStyle = .warning
                 guard alert.runModal() == .alertFirstButtonReturn else { return }
             }
 
-            await shelfStore.removeAll()
+            await shelfStore.clearAllShelves()
             NotificationCenter.default.post(name: .shelfDidClearAll, object: nil)
         }
     }
