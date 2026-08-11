@@ -54,7 +54,7 @@ xcodebuild \
 
 ```bash
 hdiutil attach dist/FileTmpShelf-0.1.0.dmg
-# 拖拽 FileTmpShelf.app 到 /Applications，启动并确认：菜单栏图标 / ⌥C 唤出 / 拖入拖出
+# 拖拽 FileTmpShelf.app 到 /Applications，启动并确认：菜单栏图标 / ⌥X 唤出 / 拖入拖出
 hdiutil detach /Volumes/FileTmpShelf
 ```
 
@@ -100,9 +100,9 @@ NOTARY_PASSWORD="xxxx-xxxx-xxxx-xxxx" \
 
 发布前逐项确认：
 
-- [ ] 测试全绿：`cd FileTmpShelf && xcodebuild test`（0 失败；注意 HotKeyManagerTests 占用 ⌥C，先确认无其他 xcodebuild 进程）
+- [ ] 测试全绿：`cd FileTmpShelf && xcodebuild test`（0 失败；注意 HotKeyManagerTests 占用 ⌥X，先确认无其他 xcodebuild 进程）
 - [ ] 图标在 Finder / Dock / 菜单栏显示正常（Assets 无缺失警告）
-- [ ] dmg 可挂载、可拖拽安装、启动后核心流程可用（菜单栏 / ⌥C / 拖入拖出 / 清空 / 设置）
+- [ ] dmg 可挂载、可拖拽安装、启动后核心流程可用（菜单栏 / ⌥X / 拖入拖出 / 清空 / 设置）
 - [ ] 已签名且已公证（`spctl -a -vv -t install dist/*.dmg` 返回 accepted）
 - [ ] `git log` 确认发布版本提交已合入 main
 - [ ] GitHub Releases / 官网上传 `dist/FileTmpShelf-<版本>.dmg`，注明 macOS 13+ / Apple Silicon（如同时支持 Intel 需单独构建）

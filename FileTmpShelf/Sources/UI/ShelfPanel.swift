@@ -199,7 +199,7 @@ struct ShelfPanelView: View {
                     Image(systemName: "tray")
                         .font(.system(size: 28))
                         .foregroundStyle(.secondary)
-                    Text("拖文件到这里，或按 ⌥C 呼出")
+                    Text("拖文件到这里，或按 ⌥X 呼出")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }

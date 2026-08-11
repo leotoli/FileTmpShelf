@@ -2,7 +2,7 @@ import AppKit
 import Carbon
 
 /// 全局快捷键管理器（Carbon RegisterEventHotKey）。
-/// Spike S3 目标：验证 ⌥C 全局唤起的低延迟、无辅助功能权限依赖、冲突检测。
+/// Spike S3 目标：验证 ⌥X 全局唤起的低延迟、无辅助功能权限依赖、冲突检测。
 final class HotKeyManager {
     enum RegisterError: Error, CustomStringConvertible {
         case hotKeyExists
@@ -16,8 +16,8 @@ final class HotKeyManager {
         }
     }
 
-    /// ⌥C 的虚拟键码（C = kVK_ANSI_C = 8）
-    static let keyCodeForOptionC: UInt32 = 8
+    /// ⌥X 的虚拟键码（X = kVK_ANSI_X = 7）
+    static let keyCodeForOptionX: UInt32 = 7
 
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
@@ -141,7 +141,7 @@ final class HotKeyManager {
 
     // MARK: - 展示
 
-    /// 把键码 + 修饰符格式化为可读组合（如 "⌥C"），供菜单栏标题 / 录制 UI 显示。
+    /// 把键码 + 修饰符格式化为可读组合（如 "⌥X"），供菜单栏标题 / 录制 UI 显示。
     static func displayString(keyCode: UInt32, modifiers: NSEvent.ModifierFlags) -> String {
         let symbols: [(NSEvent.ModifierFlags, String)] = [
             (.control, "⌃"), (.option, "⌥"), (.shift, "⇧"), (.command, "⌘")

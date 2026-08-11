@@ -17,8 +17,8 @@ final class SettingsStore: ObservableObject {
         static let clearThreshold = "settings.clearThreshold"
     }
 
-    /// 默认快捷键 ⌥C：C = kVK_ANSI_C = 8
-    static let defaultKeyCode: UInt32 = 8
+    /// 默认快捷键 ⌥X：X = kVK_ANSI_X = 7
+    static let defaultKeyCode: UInt32 = 7
     static let defaultModifiers: NSEvent.ModifierFlags = [.option]
     static let defaultPanelOpacity: Double = 0.9
     static let defaultClearThreshold: Int = 3

@@ -9,8 +9,8 @@
 ## 0. 准备
 
 - [ ] `cd FileTmpShelf && xcodebuild -project FileTmpShelf.xcodeproj -scheme FileTmpShelf -destination "platform=macOS" -derivedDataPath build/DerivedData build` 成功
-- [ ] `xcodebuild test` 全绿（0 失败；HotKeyManagerTests 注册 ⌥C，先确认无其他 xcodebuild 进程占用）
-- [ ] 运行 app，⌥C 唤出面板（或点菜单栏图标），面板出现在主屏右上角
+- [ ] `xcodebuild test` 全绿（0 失败；HotKeyManagerTests 注册 ⌥X，先确认无其他 xcodebuild 进程占用）
+- [ ] 运行 app，⌥X 唤出面板（或点菜单栏图标），面板出现在主屏右上角
 - [ ] 在 Finder 准备测试素材：2 个文本文件、1 个文件夹、1 个大文件（≥1GB，稀疏文件即可）
 - [ ] 打开一个「前台对照应用」（推荐 TextEdit 光标置于文本内，确保它持有键盘焦点）
 
@@ -79,11 +79,11 @@
 
 对应 SPIKE §5.3 通过标准。核心：Carbon `RegisterEventHotKey`。
 
-- [ ] **6.1 唤出/隐藏 toggle**：⌥C 唤出面板，再按 ⌥C 隐藏；反复 5 次无异常
-- [ ] **6.2 任意前台应用**：在 TextEdit / 浏览器 / 全屏应用等前台状态下 ⌥C 均能唤出
+- [ ] **6.1 唤出/隐藏 toggle**：⌥X 唤出面板，再按 ⌥X 隐藏；反复 5 次无异常
+- [ ] **6.2 任意前台应用**：在 TextEdit / 浏览器 / 全屏应用等前台状态下 ⌥X 均能唤出
 - [ ] **6.3 后台延迟手感**：唤出到面板可见 < 300ms（主观：无卡顿感）
 - [ ] **6.4 双入口一致**：菜单栏图标点击唤出与热键唤出行为一致
-- [ ] **6.5 冲突检测**：先把 ⌥C 交给另一应用（如系统「显示桌面」等占用场景或临时用其他工具占用）→ 启动 FileTmpShelf，菜单栏标题显示「快捷键冲突」，app 不崩溃
+- [ ] **6.5 冲突检测**：先把 ⌥X 交给另一应用（如系统「显示桌面」等占用场景或临时用其他工具占用）→ 启动 FileTmpShelf，菜单栏标题显示「快捷键冲突」，app 不崩溃
 
 ---
 
@@ -127,7 +127,7 @@
 - [ ] **10.1 dmg 可挂载**：`hdiutil attach dist/FileTmpShelf-0.1.0.dmg` 成功，卷内含 FileTmpShelf.app 与 Applications 快捷方式
 - [ ] **10.2 拖拽安装**：把 FileTmpShelf.app 拖入 /Applications（拖拽安装布局生效）
 - [ ] **10.3 干净环境启动**：全新环境（无开发者豁免）从 Launchpad/Applications 启动——已签名公证产物应无 Gatekeeper 拦截；未签名产物记录「右键→打开」放行路径
-- [ ] **10.4 干净环境核心流程**：菜单栏图标 / ⌥C 唤出 / 拖入挂载 / 拖出真实移动 / 清空货架 / 打开设置 全部可用
+- [ ] **10.4 干净环境核心流程**：菜单栏图标 / ⌥X 唤出 / 拖入挂载 / 拖出真实移动 / 清空货架 / 打开设置 全部可用
 - [ ] **10.5 卸载重装干净**：删除 app + 数据目录（`~/Library/Application Support/FileTmpShelf/`）后重装，货架为空、无残留报错
 - [ ] **10.6 签名校验（若有证书）**：`codesign --verify --deep --strict` 与 `spctl -a -vv -t install dist/*.dmg` 通过
 

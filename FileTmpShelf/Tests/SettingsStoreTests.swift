@@ -18,10 +18,12 @@ final class SettingsStoreTests: XCTestCase {
 
     // MARK: - 默认值
 
-    /// 空 UserDefaults 下应全部回退默认：⌥C（keyCode 8 + .option）、透明度 0.9、阈值 3、不开机启动
+    /// 空 UserDefaults 下应全部回退默认：⌥X（keyCode 7 + .option）、透明度 0.9、阈值 3、不开机启动
     func testDefaults() {
         let store = SettingsStore(defaults: defaults)
 
+        XCTAssertEqual(SettingsStore.defaultKeyCode, 7)
+        XCTAssertEqual(store.hotKeyKeyCode, 7)
         XCTAssertEqual(store.hotKeyKeyCode, SettingsStore.defaultKeyCode)
         XCTAssertEqual(store.hotKeyModifiers, SettingsStore.defaultModifiers)
         XCTAssertEqual(store.hotKeyModifiers, [.option])
