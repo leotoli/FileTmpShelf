@@ -281,6 +281,19 @@ V2 只规划 **V1 未交付**的能力，不再重复已完成功能。
 
 M3 最终范围：**仅多选 + 多文件 MV 移动**（排序/置顶/Quick Look 已按用户决策移除）。
 
+### 🔴 副屏点设置崩溃（15:09/15:17 复现）— 已闭环（`870968b`）
+
+用户多次反馈"副屏唤出暂存箱后点设置崩溃"（栈 `openSettings → objc_retain`）。本机最终完整复现（设置开→关→再开第 2 轮必崩）后定位：
+
+| 根因 | 修复 |
+|------|------|
+| willClose 里 settingsWindow = nil → 窗口唯一强引用释放 → 关闭动画 `_NSWindowTransformAnimation dealloc` 悬垂 | 保持强引用；openSettings 检测 `isVisible` 不可见才重建（关闭只是隐藏） |
+| SettingsView `@State ShelfStore()` 每次 init 新 actor 与面板并发操作同一存储 | `ShelfStore.shared` 单例（面板/设置页共享同一 actor） |
+| isReleasedWhenClosed=true 提前释放窗口（动画崩溃） | 移除 |
+| AppDelegate 被 SwiftUI 释放（accessory app 无主窗口） | static 强持有（`870968b` 前已加） |
+
+验证：设置开→关 ×6 循环 ✅、⌘, 触发 ×3 ✅、面板+设置循环 ✅、86 测试 0 失败 ✅；15:18 后零崩溃报告。待用户副屏真机回归。
+
 ## 9. 决策记录（2026-08-11 已拍板）
 
 1. **V1 不发布，等 V2 完成后统一发布 V2.0** —— V1 RC 仅内部使用；V2-1 热键 ⌥X 直接并入 V2 一并交付，不再单独出 V1 补丁。
