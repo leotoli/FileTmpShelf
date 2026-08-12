@@ -34,11 +34,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.image = NSImage(systemSymbolName: "tray.full", accessibilityDescription: "FileTmpShelf")
         }
         let menu = NSMenu()
-        menu.addItem(withTitle: hotKeyMenuTitle(), action: #selector(togglePanel), keyEquivalent: "")
-        menu.addItem(withTitle: "清空货架", action: #selector(clearShelf), keyEquivalent: "")
+        // 显式设置 target = self：SwiftUI App 生命周期下 responder chain 路由
+        // 到 NSApp.delegate（SwiftUI 适配器包装对象）可能悬垂，导致点击"设置…"崩溃
+        // （EXC_BAD_ACCESS objc_retain in AppDelegate.openSettings）。
+        func addItem(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.target = self
+            return item
+        }
+        menu.addItem(addItem(hotKeyMenuTitle(), #selector(togglePanel)))
+        menu.addItem(addItem("清空货架", #selector(clearShelf)))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(withTitle: "设置…", action: #selector(openSettings), keyEquivalent: ",")
-        menu.addItem(withTitle: "退出", action: #selector(quit), keyEquivalent: "q")
+        menu.addItem(addItem("设置…", #selector(openSettings), key: ","))
+        menu.addItem(addItem("退出", #selector(quit), key: "q"))
         item.menu = menu
         statusItem = item
 
