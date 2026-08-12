@@ -272,7 +272,14 @@ V2 只规划 **V1 未交付**的能力，不再重复已完成功能。
 | Bug3 | 无法多选，只显示选择数 | 选择交互被 SwiftUI 手势/事件顺序干扰 | 点击走 mouseUp 区分；无 SwiftUI 手势干扰 |
 | Bug4 | 无法 MV 移动，目标出现 .textClipping | endedAt 立即清空 managers → promise delegate 悬垂 → Finder 兑现失败 | managers 强持有到兑现完成 |
 
-**M3 重做（简化版）**：`433dd98` — 仅多选（⌘/⇧/plain 纯逻辑）+ 多文件 MV 移动，86 测试 0 失败，待真机复核。
+**M3 重做（简化版）**：`433dd98` — 仅多选（⌘/⇧/plain 纯逻辑）+ 多文件 MV 移动，86 测试 0 失败。
+
+**🎉 M3 正式闭环（2026-08-12）**：Bug4 根因修复（`db878ce`）——子类化追加类型时缺失 `writingOptions(forType:)` override（buckleyisms 指南关键步骤）导致 Finder 兑现异常（UUID 文件 + .textClipping）。补上后用户真机复测：
+1. ✅ 单文件拖出 = 真实移动（源消失，无 UUID/无 textClipping）
+2. ✅ 多选 2-3 个 = 全部真实移动
+3. ✅ 微信/iTerm2 回归通过
+
+M3 最终范围：**仅多选 + 多文件 MV 移动**（排序/置顶/Quick Look 已按用户决策移除）。
 
 ## 9. 决策记录（2026-08-11 已拍板）
 
