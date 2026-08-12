@@ -155,26 +155,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 无法路由到 SwiftUI Settings 场景，设置窗口从未被创建。
         // 改为 AppDelegate 手动持有设置窗口（NSWindow + SettingsView），
         // 保持系统设置窗口观感（标题栏/可关闭），与 Settings 场景并存。
-        if settingsWindow == nil || !(settingsWindow?.isVisible ?? false) {
-            // ⚠️ 关闭动画崩溃根因（本地复现 15:17/15:18）：
-            // willClose 里 settingsWindow = nil 会释放窗口唯一强引用 → 窗口在
-            // 关闭动画（_NSWindowTransformAnimation）期间被释放 → dealloc 悬垂崩溃。
-            // 正确做法：窗口关闭后保持强引用（默认 isReleasedWhenClosed=false 窗口
-            // 只是隐藏），这里检测不可见 → 重建窗口，旧窗口自然释放（非动画期间）。
-            let content = NSHostingView(rootView: SettingsView())
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                backing: .buffered,
-                defer: false
-            )
-            window.title = "FileTmpShelf 设置"
-            window.contentView = content
-            window.center()
-            settingsWindow = window
+        var needNewWindow = false
+        if settingsWindow == nil {
+            needNewWindow = true
+        } else {
+            // 检查窗口是否已被隐藏（用户关闭或调出后隐藏）
+            // ⚠️ 不检测 isVisible 直接 hide()，因为 isVisible 在 accessory app 里
+            // 可能有延迟——窗口正在动画关闭时 isVisible 可能仍为 true
+            // 但窗口实际上已不可见。可靠做法：尝试 showWindow，如果失败则重建。
+            let existing = settingsWindow!
+            if existing.isVisible {
+                // 窗口已显示 → 只是 bringToFront
+                NSApp.activate(ignoringOtherApps: true)
+                existing.makeKeyAndOrderFront(nil)
+            } else {
+                // 窗口不可见 → 重建
+                let content = NSHostingView(rootView: SettingsView())
+                let window = NSWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
+                    styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                    backing: .buffered,
+                    defer: false
+                )
+                window.title = "FileTmpShelf 设置"
+                window.contentView = content
+                window.center()
+                settingsWindow = window
+                needNewWindow = true
+            }
         }
-        NSApp.activate(ignoringOtherApps: true)
-        settingsWindow?.makeKeyAndOrderFront(nil)
+
+        if needNewWindow && !(settingsWindow?.isVisible ?? false) {
+            NSApp.activate(ignoringOtherApps: true)
+            settingsWindow?.orderFront(nil)
+            // accessory app 下 makeKeyAndOrderFront 可能不生效（无 dock 图标），
+            // 尝试 orderFrontRegardless 作为 fallback
+            if !settingsWindow!.isVisible {
+                settingsWindow?.orderFrontRegardless()
+            }
+        }
     }
 
     @objc private func quit() {
