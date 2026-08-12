@@ -54,7 +54,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return item
         }
         menu.addItem(addItem(hotKeyMenuTitle(), #selector(togglePanel)))
-        menu.addItem(addItem("清空货架", #selector(clearShelf)))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(addItem("设置…", #selector(openSettings), key: ","))
         menu.addItem(addItem("退出", #selector(quit), key: "q"))
@@ -144,11 +143,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func togglePanel() {
         panelController?.toggle()
-    }
-
-    @objc private func clearShelf() {
-        guard let panelController else { return }
-        panelController.clearAllWithConfirmation()
     }
 
     /// 菜单栏角标：条目数 > 0 时显示数字（体验增强 3.4）
