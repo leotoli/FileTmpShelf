@@ -17,6 +17,9 @@ final class ShelfPanelController: NSObject {
     /// 条目数变化回调（菜单栏角标用，体验增强 3.4）
     var onItemCountChange: ((Int) -> Void)?
 
+    /// Escape 键监听器（面板可见时生效，隐藏面板；隐藏时移除）
+    private var keyEventMonitor: Any?
+
     init(settings: SettingsStore = SettingsStore.shared, positionStore: PanelPositionStore = PanelPositionStore()) {
         self.settings = settings
         self.positionStore = positionStore
@@ -45,11 +48,17 @@ final class ShelfPanelController: NSObject {
         if !panel.isVisible {
             placePanel(panel)
         }
+        // accessory app 默认不接收键盘事件；激活后 Escape 监听才能生效
+        //（ignoringOtherApps 不抢 Dock 焦点，与 Alfred/Spotlight 行为一致）
+        NSApp.activate(ignoringOtherApps: true)
         panel.orderFrontRegardless()
+        // Escape 键监听：面板可见时监听，隐藏时移除（避免全局监听泄漏）
+        startEscapeMonitor()
     }
 
     func hide() {
         panel?.orderOut(nil)
+        stopEscapeMonitor()
     }
 
     /// 清空货架（体验缺陷 2.2）：超过设置阈值时确认；≤阈值直接清空；
@@ -84,9 +93,32 @@ final class ShelfPanelController: NSObject {
         panel?.alphaValue = value
     }
 
+    // MARK: - Escape 键关闭（V2 增强）
+
+    /// 面板可见时启动 Escape 键监听；重复调用幂等（已有监听则跳过）。
+    private func startEscapeMonitor() {
+        guard keyEventMonitor == nil else { return }
+        keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            // kVK_Escape = 53
+            if event.keyCode == 53 {
+                self?.hide()
+                return nil
+            }
+            return event
+        }
+    }
+
+    /// 面板隐藏时移除 Escape 键监听；幂等。
+    private func stopEscapeMonitor() {
+        if let monitor = keyEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            keyEventMonitor = nil
+        }
+    }
+
     private func createPanel() {
         let newPanel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 188),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 204),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -103,7 +135,9 @@ final class ShelfPanelController: NSObject {
         newPanel.alphaValue = panelOpacity
 
         let content = NSHostingView(
-            rootView: ShelfPanelView(store: store) { [weak self] count in
+            rootView: ShelfPanelView(store: store, onDismiss: { [weak self] in
+                self?.hide()
+            }) { [weak self] count in
                 self?.onItemCountChange?(count)
             }
         )
@@ -175,9 +209,15 @@ final class ShelfPanelController: NSObject {
 struct ShelfPanelView: View {
     @StateObject private var model: ShelfPanelModel
 
-    init(store: ShelfStore, onItemsChange: ((Int) -> Void)? = nil) {
+    /// 面板关闭回调（header 关闭按钮 + Escape 键触发）
+    var onDismiss: (() -> Void)?
+    /// 面板宽度用于自适应布局（V2 固定 520，后续可调整）
+    private let panelWidth: CGFloat = 520
+
+    init(store: ShelfStore, onDismiss: (() -> Void)? = nil, onItemsChange: ((Int) -> Void)? = nil) {
         _model = StateObject(wrappedValue: ShelfPanelModel(store: store))
         _model.wrappedValue.onItemsChange = onItemsChange
+        self.onDismiss = onDismiss
     }
 
     var body: some View {
@@ -187,7 +227,7 @@ struct ShelfPanelView: View {
         }
         .padding(12)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .frame(width: 520, height: 188)
+        .frame(width: 520, height: 204)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             model.addDroppedFiles(providers)
             return true
@@ -199,6 +239,17 @@ struct ShelfPanelView: View {
     /// 头部工具栏：货架切换 + 货架管理 + 条目数 + 清理失效 + 清空（V2-4）
     private var header: some View {
         HStack(spacing: 6) {
+            if let onDismiss {
+                Button {
+                    onDismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("关闭面板（Escape）")
+            }
             shelfSwitcher
             shelfManagementMenu
             Spacer(minLength: 8)
@@ -290,25 +341,47 @@ struct ShelfPanelView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(model.items) { item in
-                        ShelfItemView(
-                            item: item,
-                            onMoveCompleted: { moved in
-                                model.removeItem(moved)
-                            },
-                            onClick: { modifier, clickedID in
-                                model.handleClick(clickedID, modifier: modifier)
-                            },
-                            isSelected: model.isSelected(item.id),
-                            selectedItemIDs: model.selectedIDs,
-                            selectedItems: model.selectedItems
-                        )
+            VStack(spacing: 4) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(model.items) { item in
+                            ShelfItemView(
+                                item: item,
+                                onMoveCompleted: { moved in
+                                    model.removeItem(moved)
+                                },
+                                onClick: { modifier, clickedID in
+                                    model.handleClick(clickedID, modifier: modifier)
+                                },
+                                isSelected: model.isSelected(item.id),
+                                selectedItemIDs: model.selectedIDs,
+                                selectedItems: model.selectedItems
+                            )
+                        }
                     }
+                    .padding(10)
                 }
-                .padding(10)
+                selectionHint
             }
+        }
+    }
+
+    /// 多选快捷键提示（有条目时可见）
+    private var selectionHint: some View {
+        HStack {
+            Spacer()
+            HStack(spacing: 8) {
+                if !model.selectedIDs.isEmpty {
+                    Text("已选 \(model.selectedIDs.count) 个")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                Text("⌘ 点击多选  ·  ⇧ 区间选择")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 2)
         }
     }
 

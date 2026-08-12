@@ -19,3 +19,4 @@ build/
 dist/
 # 签名凭据（私钥敏感）
 DeveloperID/
+build/
