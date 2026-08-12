@@ -262,4 +262,18 @@ final class CombinedFilePromiseProvider: NSFilePromiseProvider {
         }
         return super.pasteboardPropertyList(forType: type)
     }
+
+    /// 关键（buckleyisms.com 指南）：子类化追加类型时必须 override writingOptions。
+    /// 追加的非文件类型（fileURL/filenames）返回空选项（标准写入），
+    /// promise 类型返回 super（保留 promise 兑现语义）。缺失此方法会导致
+    /// Finder 对拖拽的兑现/类型处理异常（Bug4 的 UUID 文件 + .textClipping）。
+    override func writingOptions(
+        forType type: NSPasteboard.PasteboardType,
+        pasteboard: NSPasteboard
+    ) -> NSPasteboard.WritingOptions {
+        if type == .fileURL || type.rawValue == "NSFilenamesPboardType" {
+            return []
+        }
+        return super.writingOptions(forType: type, pasteboard: pasteboard)
+    }
 }
