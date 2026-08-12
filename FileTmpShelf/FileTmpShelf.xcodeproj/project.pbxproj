@@ -12,6 +12,7 @@
 		674741E72C016208C6468037 /* HotKeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10127467ED0091A27C5F70EE /* HotKeyManager.swift */; };
 		7AE7C0A017A91DEB0E669F9F /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF572E60CE3601284F0010D8 /* SettingsStore.swift */; };
 		85CA99F9A8A1430F42FCA381 /* HotKeyManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38CEE07704E2657BC74F04DE /* HotKeyManagerTests.swift */; };
+		8F21B4EA203EE2F8158025BE /* ShelfSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCB385A1537FF0991D404AC3 /* ShelfSelection.swift */; };
 		A6246BA65008393F91D0130D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0585069A996DF4E45FD85B5F /* Assets.xcassets */; };
 		AA436E06B046F23EFDA6D679 /* PanelPositionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39CFBB993D2DADA3873FCE8E /* PanelPositionStore.swift */; };
 		B1B01A976FB8B3480325FC41 /* FilePromiseDragView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4641C63984C722768BA0A616 /* FilePromiseDragView.swift */; };
@@ -20,6 +21,7 @@
 		C18CC65737B44657D9DB2600 /* ShelfStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1BCA0FCE8839EC24FA4E2C2 /* ShelfStore.swift */; };
 		C4F7D11D20C3830883E38375 /* AppInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C870C210AB0EC73A51282FE /* AppInfo.swift */; };
 		C546CD0CFFC5B6887DEB488F /* FilePromiseDragManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B076B2C2AE0F822E1ACD5FFE /* FilePromiseDragManagerTests.swift */; };
+		D7125777FE2102787D34EF6D /* ShelfSelectionLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B778E02EC5A79A337242109E /* ShelfSelectionLogicTests.swift */; };
 		EAE3AEC651E897ED2DBAE503 /* ShelfPanelPositionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FDEA85D91521B55BCA13645 /* ShelfPanelPositionTests.swift */; };
 		FA5035EC50508580D41DA43D /* FilePromiseDragManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C67D7A27EC7ABBB4907960A2 /* FilePromiseDragManager.swift */; };
 /* End PBXBuildFile section */
@@ -49,8 +51,10 @@
 		86EA82CB2075785C6A88CCA7 /* SettingsStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStoreTests.swift; sourceTree = "<group>"; };
 		9C870C210AB0EC73A51282FE /* AppInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppInfo.swift; sourceTree = "<group>"; };
 		B076B2C2AE0F822E1ACD5FFE /* FilePromiseDragManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePromiseDragManagerTests.swift; sourceTree = "<group>"; };
+		B778E02EC5A79A337242109E /* ShelfSelectionLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShelfSelectionLogicTests.swift; sourceTree = "<group>"; };
 		C1BCA0FCE8839EC24FA4E2C2 /* ShelfStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShelfStore.swift; sourceTree = "<group>"; };
 		C67D7A27EC7ABBB4907960A2 /* FilePromiseDragManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePromiseDragManager.swift; sourceTree = "<group>"; };
+		CCB385A1537FF0991D404AC3 /* ShelfSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShelfSelection.swift; sourceTree = "<group>"; };
 		CF572E60CE3601284F0010D8 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -92,6 +96,7 @@
 				38CEE07704E2657BC74F04DE /* HotKeyManagerTests.swift */,
 				86EA82CB2075785C6A88CCA7 /* SettingsStoreTests.swift */,
 				0FDEA85D91521B55BCA13645 /* ShelfPanelPositionTests.swift */,
+				B778E02EC5A79A337242109E /* ShelfSelectionLogicTests.swift */,
 				83C46347A255D1216C305A3A /* ShelfStoreTests.swift */,
 			);
 			path = Tests;
@@ -121,6 +126,7 @@
 				10127467ED0091A27C5F70EE /* HotKeyManager.swift */,
 				39CFBB993D2DADA3873FCE8E /* PanelPositionStore.swift */,
 				CF572E60CE3601284F0010D8 /* SettingsStore.swift */,
+				CCB385A1537FF0991D404AC3 /* ShelfSelection.swift */,
 				C1BCA0FCE8839EC24FA4E2C2 /* ShelfStore.swift */,
 			);
 			path = Core;
@@ -222,6 +228,7 @@
 				85CA99F9A8A1430F42FCA381 /* HotKeyManagerTests.swift in Sources */,
 				B7D2A747289FEA6B9E4F5E64 /* SettingsStoreTests.swift in Sources */,
 				EAE3AEC651E897ED2DBAE503 /* ShelfPanelPositionTests.swift in Sources */,
+				D7125777FE2102787D34EF6D /* ShelfSelectionLogicTests.swift in Sources */,
 				0681C05447DBB7C5E652915C /* ShelfStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -238,6 +245,7 @@
 				AA436E06B046F23EFDA6D679 /* PanelPositionStore.swift in Sources */,
 				7AE7C0A017A91DEB0E669F9F /* SettingsStore.swift in Sources */,
 				B6EE6CD264DBF04592921ACC /* ShelfPanel.swift in Sources */,
+				8F21B4EA203EE2F8158025BE /* ShelfSelection.swift in Sources */,
 				C18CC65737B44657D9DB2600 /* ShelfStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

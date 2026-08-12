@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Spike S2：file promise 拖出发起视图。
+/// file promise 拖出发起视图（S2 核心 + V2-6 多选/多文件）。
 ///
 /// SwiftUI 的 `.onDrag` 只能返回 `NSItemProvider`，而 file promise 需要
 /// `NSFilePromiseProvider`（二者都符合 NSPasteboardWriting 但无继承关系），
@@ -9,21 +9,42 @@ import SwiftUI
 /// 本视图以 overlay 形式盖在条目内容上，`mouseDown` 记录起点，`mouseDragged`
 /// 超过阈值（10pt）后用 `NSDraggingItem(pasteboardWriter: promise)` 发起拖拽会话。
 ///
-/// 视图随 SwiftUI 条目生命周期存活，天然强持有 `FilePromiseDragManager`，
-/// 解决 NSFilePromiseProvider.delegate 是 weak、而 Finder 兑现承诺（拖放结束后
-/// 异步回调）需要 delegate 存活的问题。
+/// 多选（V2-6）：mouseUp 区分点击选择（⌘ 切换 / Shift 区间 / 无修饰键单选），
+/// 被拖条目在选中集中且多选时 → 批量拖出整个选中集。
+///
+/// 生命周期关键（Bug4 教训）：NSFilePromiseProvider.delegate 是 weak，Finder
+/// 兑现承诺（drop 后异步回调 writePromiseToURL）需要 manager 存活。**不能在
+/// draggingSession endedAt 里立即清空 managers**——兑现回调可能在 endedAt 之后
+/// 才到达，提前释放会致 Finder 兑现失败（生成 .textClipping）。managers 由
+/// 本视图强持有，直到兑现完成或视图销毁。
 final class FilePromiseDragView: NSView {
     var item: ShelfItem? {
         didSet { updateInteractions() }
     }
+    /// 单文件移动完成回调（Finder 兑现成功 → 移除货架条目）
     var onMoveCompleted: ((ShelfItem) -> Void)? {
         didSet { updateInteractions() }
     }
+    /// 点击选择回调：modifier 分类 + 条目 id（UI 层翻译为选择状态）
+    var onClick: ((SelectionModifier, UUID) -> Void)? {
+        didSet { updateInteractions() }
+    }
+    /// 当前选中集合（决定批量拖出集合）
+    var selectedItemIDs: Set<UUID> = [] {
+        didSet { updateInteractions() }
+    }
+    /// 当前选中条目（按货架顺序，批量拖出用）
+    var selectedItems: [ShelfItem] = [] {
+        didSet { updateInteractions() }
+    }
 
-    /// 当前拖拽会话的 manager；provider.delegate 是 weak，需随本视图生命周期强持有
-    private var activeManager: FilePromiseDragManager?
+    /// 当前拖拽会话的 manager 列表；provider.delegate 是 weak，需随本视图生命周期强持有。
+    /// 不随 endedAt 立即清空（Finder 兑现异步，见类注释）。
+    private var activeManagers: [FilePromiseDragManager] = []
     private var mouseDownLocation: CGPoint = .zero
     private var hasDraggingSession = false
+    /// 静态拖拽标记（防止拖拽中误触发其他交互，如 Quick Look）
+    static var isDragging = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -45,16 +66,29 @@ final class FilePromiseDragView: NSView {
         true
     }
 
-    /// 关键（体验缺陷 2.1 修复）：鼠标落在条目区域拖动时，事件应只用于发起文件拖拽，
-    /// 不允许窗口解释为"移动窗口"。面板移动保留给空白区域（isMovableByWindowBackground）。
+    /// 鼠标落在条目区域拖动时，事件应只用于发起文件拖拽，不允许窗口解释为"移动窗口"。
     override var mouseDownCanMoveWindow: Bool {
         false
     }
 
     override func mouseDown(with event: NSEvent) {
         mouseDownLocation = event.locationInWindow
-        // 拖拽反馈（3.1）：按下即轻微压暗，拖拽会话结束后恢复
         alphaValue = 0.85
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard !hasDraggingSession else { return }
+        alphaValue = 1.0
+        guard let item else { return }
+        // 未拖动 = 点击 → 选择（Finder 语义：⌘ 切换 / Shift 区间 / 无修饰键单选）
+        let flags = event.modifierFlags
+        if flags.contains(.shift) {
+            onClick?(.shift, item.id)
+        } else if flags.contains(.command) {
+            onClick?(.command, item.id)
+        } else {
+            onClick?(.plain, item.id)
+        }
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -68,33 +102,49 @@ final class FilePromiseDragView: NSView {
         // 位移阈值：区分"点击/滚动"与"拖拽"，与 Finder 条目手感一致
         guard distance > 10 else { return }
 
-        let manager = FilePromiseDragManager(item: item) { [weak self] moved in
-            self?.onMoveCompleted?(moved)
+        // 批量拖出：被拖条目在选中集中且多选 → 拖出整个选中集；否则仅拖出自身
+        var dragTargets: [ShelfItem]
+        if selectedItemIDs.contains(item.id), selectedItems.count > 1 {
+            dragTargets = selectedItems
+        } else {
+            dragTargets = [item]
         }
-        activeManager = manager
+        dragTargets = dragTargets.filter { $0.isReachable }
+        guard !dragTargets.isEmpty else { return }
 
-        // 子类化 NSFilePromiseProvider（Apple 官方做法，见 buckleyisms.com 拖拽指南）：
-        //   override writableTypes 追加 public.file-url + NSFilenamesPboardType。
-        // 相比"包装 writer"：系统仍识别它为 promise provider（Finder 兑现正常），
-        // 且追加类型会真实写入 pasteboard 类型列表（微信/iTerm2 能看到并接受）。
-        // 背景：仅 promise 时微信/iTerm2 收不到文件（它们需要 public.file-url）；
-        //       包装 writer 时类型列表可能缺失 fileURL（系统对 promise 特殊处理）。
-        let promise = CombinedFilePromiseProvider(
-            fileType: FilePromiseDragManager.promiseFileType(for: item),
-            delegate: manager,
-            fileURL: item.fileURL
-        )
-        let draggingItem = NSDraggingItem(pasteboardWriter: promise)
-        draggingItem.setDraggingFrame(
-            NSRect(origin: .zero, size: frame.size),
-            contents: snapshotImage()
-        )
-        beginDraggingSession(with: [draggingItem], event: event, source: self)
+        var managers: [FilePromiseDragManager] = []
+        var draggingItems: [NSDraggingItem] = []
+        let dragIDs = Set(dragTargets.map(\.id))
+        for (index, target) in dragTargets.enumerated() {
+            // 每个 promise 一个 manager；Finder 兑现（writePromiseToURL 成功）时
+            // 按整批 id 移除货架条目（幂等：remove(ids:) 按 id 去重，重复调用无害）
+            let manager = FilePromiseDragManager(item: target) { [weak self] _ in
+                self?.onMoveCompleted?(target)
+            }
+            managers.append(manager)
+
+            let promise = CombinedFilePromiseProvider(
+                fileType: FilePromiseDragManager.promiseFileType(for: target),
+                delegate: manager,
+                fileURL: target.fileURL
+            )
+            let draggingItem = NSDraggingItem(pasteboardWriter: promise)
+            // 多文件拖拽 frame 轻微错位（fan-out），展示"多个文件"而非重叠成一个
+            var dragFrame = NSRect(origin: .zero, size: frame.size)
+            dragFrame.origin.x += CGFloat(index) * 14
+            dragFrame.origin.y -= CGFloat(index) * 8
+            draggingItem.setDraggingFrame(dragFrame, contents: snapshotImage())
+            draggingItems.append(draggingItem)
+        }
+        // 强持有 managers：Finder 兑现是 drop 后异步回调，manager 提前释放会兑现失败
+        activeManagers = managers
+        Self.isDragging = true
+        beginDraggingSession(with: draggingItems, event: event, source: self)
         hasDraggingSession = true
     }
 
     private func updateInteractions() {
-        isHidden = item.map { !$0.isReachable } ?? true
+        isHidden = (item == nil)
     }
 
     private func snapshotImage() -> NSImage? {
@@ -109,8 +159,7 @@ final class FilePromiseDragView: NSView {
 
 extension FilePromiseDragView: NSDraggingSource {
     /// 拖拽操作掩码用 .copy：file promise 的交付路径是"Finder 请求 → 我们回调写入"，
-    /// 由 `FilePromiseDragManager.writePromiseToURL` 里的 moveItem 完成真实移动，
-    /// 不让 Finder 自行处理源文件（否则货架无法感知、也无法按承诺回调移动）。
+    /// 由 `FilePromiseDragManager.writePromiseToURL` 里的 moveItem 完成真实移动。
     func draggingSession(
         _ session: NSDraggingSession,
         sourceOperationMaskFor context: NSDraggingContext
@@ -120,20 +169,16 @@ extension FilePromiseDragView: NSDraggingSource {
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         hasDraggingSession = false
+        Self.isDragging = false
         alphaValue = 1.0
-        // 非 promise 目标（微信/iTerm2 等）交付语义：拖拽会话结束且没有触发
-        // promise 兑现（activeManager 仍在 = move 未回调）→ 货架条目移除，
-        // 源文件保留原位（对方读取的是文件 URL 内容，文件本体仍在磁盘）。
-        // Finder 场景 move 成功会走 onMoveCompleted（activeManager 在成功时回调
-        // 后仍持有，但此时条目已被移除——幂等保护由 ShelfStore.remove 承担）。
-        if let item, let manager = activeManager, !manager.didCompleteMove {
-            onMoveCompleted?(item)
-        }
-        activeManager = nil
+        // Bug4 教训：不在此清空 activeManagers！Finder 兑现是 drop 后异步回调，
+        // 提前释放 manager 会让 NSFilePromiseProvider.delegate 悬垂 → 兑现失败
+        // → Finder 生成 .textClipping。managers 保持由本视图持有直到兑现完成。
+        // operation 保留供外部判断（当前单/多文件兑现路径均通过 onMoveCompleted 回调）。
+        _ = operation
     }
 
     func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
-        // 拖拽正式开始时压暗条目（与按下反馈连续）
         alphaValue = 0.5
     }
 }
@@ -142,17 +187,26 @@ extension FilePromiseDragView: NSDraggingSource {
 struct FilePromiseDragRepresentable: NSViewRepresentable {
     let item: ShelfItem
     var onMoveCompleted: (ShelfItem) -> Void
+    var onClick: (SelectionModifier, UUID) -> Void
+    var selectedItemIDs: Set<UUID>
+    var selectedItems: [ShelfItem]
 
     func makeNSView(context: Context) -> FilePromiseDragView {
         let view = FilePromiseDragView()
         view.item = item
         view.onMoveCompleted = onMoveCompleted
+        view.onClick = onClick
+        view.selectedItemIDs = selectedItemIDs
+        view.selectedItems = selectedItems
         return view
     }
 
     func updateNSView(_ nsView: FilePromiseDragView, context: Context) {
         nsView.item = item
         nsView.onMoveCompleted = onMoveCompleted
+        nsView.onClick = onClick
+        nsView.selectedItemIDs = selectedItemIDs
+        nsView.selectedItems = selectedItems
     }
 }
 
@@ -173,14 +227,12 @@ final class CombinedFilePromiseProvider: NSFilePromiseProvider {
 
     init(fileType: String, delegate: NSFilePromiseProviderDelegate?, fileURL: URL) {
         self.fileURL = fileURL
-        super.init()   // NSFilePromiseProvider() 是 designated init；fileType/delegate 通过属性设置
+        super.init()
         self.fileType = fileType
         self.delegate = delegate
     }
 
     required init?(coder: NSCoder) {
-        // NSFilePromiseProvider 的 coder init 不在 Swift 可见的 designated 链中，
-        // 但我们从不真正解码 provider（拖拽 item 不归档），用 () 初始化即可。
         super.init()
     }
 

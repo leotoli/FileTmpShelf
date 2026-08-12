@@ -188,6 +188,8 @@ struct ShelfPanelView: View {
             model.addDroppedFiles(providers)
             return true
         }
+        // 注：空白点击清空选择不做 SwiftUI 手势（会干扰条目 overlay 点击，Bug3 教训）；
+        // 如需空白清空，由面板背景 NSView 层处理（后续增强）。
     }
 
     /// 头部工具栏：货架切换 + 货架管理 + 条目数 + 清理失效 + 清空（V2-4）
@@ -287,9 +289,18 @@ struct ShelfPanelView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     ForEach(model.items) { item in
-                        ShelfItemView(item: item) { moved in
-                            model.removeItem(moved)
-                        }
+                        ShelfItemView(
+                            item: item,
+                            onMoveCompleted: { moved in
+                                model.removeItem(moved)
+                            },
+                            onClick: { modifier, clickedID in
+                                model.handleClick(clickedID, modifier: modifier)
+                            },
+                            isSelected: model.isSelected(item.id),
+                            selectedItemIDs: model.selectedIDs,
+                            selectedItems: model.selectedItems
+                        )
                     }
                 }
                 .padding(10)
@@ -355,6 +366,8 @@ final class ShelfPanelModel: ObservableObject {
     @Published private(set) var shelves: [ShelfMeta] = []
     @Published private(set) var currentShelfName: String = ""
     @Published private(set) var selectedShelfID: UUID?
+    /// 多选状态（V2-6）：⌘ 切换 / Shift 区间 / 点击替换 / 空白清空
+    @Published private(set) var selection = ShelfSelection()
     private let store: ShelfStore
     /// 条目数变化回调（菜单栏角标，体验增强 3.4）
     var onItemsChange: ((Int) -> Void)?
@@ -377,6 +390,42 @@ final class ShelfPanelModel: ObservableObject {
         if let clearAllObserver {
             NotificationCenter.default.removeObserver(clearAllObserver)
         }
+    }
+
+    // MARK: - 多选（V2-6）
+
+    /// 当前选中条目 id 集合
+    var selectedIDs: Set<UUID> { selection.ids }
+
+    /// 当前选中条目（按货架顺序，批量拖出用）
+    var selectedItems: [ShelfItem] {
+        items.filter { selection.ids.contains($0.id) }
+    }
+
+    func isSelected(_ id: UUID) -> Bool {
+        selection.ids.contains(id)
+    }
+
+    /// 点击条目选择（modifier 分类由拖拽视图层提供）
+    func handleClick(_ id: UUID, modifier: SelectionModifier) {
+        switch modifier {
+        case .plain:
+            selection.selectOnly(id)
+        case .command:
+            selection.toggle(id)
+        case .shift:
+            selection.shift(id, order: items.map(\.id))
+        }
+    }
+
+    /// 点击空白取消选择
+    func clearSelection() {
+        selection.clear()
+    }
+
+    /// 批量移除选中（删除 / 拖出后同步选中集）
+    func removeSelected(_ ids: Set<UUID>) {
+        selection.remove(ids)
     }
 
     private func reload() {
@@ -421,6 +470,7 @@ final class ShelfPanelModel: ObservableObject {
         Task {
             await store.remove(id: item.id)
             items = await store.all()
+            selection.remove([item.id])
             notifyCount()
         }
     }
@@ -509,12 +559,26 @@ struct ShelfItemView: View {
     let item: ShelfItem
     /// 移动成功后的回调（通知货架移除该条目）
     var onMoveCompleted: (ShelfItem) -> Void
+    /// 点击选择回调（⌘/⇧/plain 由视图层分类）
+    var onClick: (SelectionModifier, UUID) -> Void
+    /// 是否选中（高亮）
+    var isSelected: Bool
+    /// 选中条目集合（批量拖出用）
+    var selectedItemIDs: Set<UUID>
+    /// 选中条目（按货架顺序，批量拖出用）
+    var selectedItems: [ShelfItem]
 
     @ViewBuilder
     var body: some View {
         if item.isReachable {
             content.overlay(
-                FilePromiseDragRepresentable(item: item, onMoveCompleted: onMoveCompleted)
+                FilePromiseDragRepresentable(
+                    item: item,
+                    onMoveCompleted: onMoveCompleted,
+                    onClick: onClick,
+                    selectedItemIDs: selectedItemIDs,
+                    selectedItems: selectedItems
+                )
             )
         } else {
             content.opacity(0.6)
@@ -545,6 +609,19 @@ struct ShelfItemView: View {
         }
         .padding(8)
         .frame(width: 150, height: 56)
+        .background(
+            isSelected
+                ? Color.accentColor.opacity(0.30)
+                : Color.clear,
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(
+                    isSelected ? Color.accentColor.opacity(0.7) : Color.clear,
+                    lineWidth: 1.5
+                )
+        )
     }
 }
