@@ -188,9 +188,14 @@ struct ShelfPanelView: View {
             model.addDroppedFiles(providers)
             return true
         }
+        .contentShape(Rectangle())
+        // 点击空白 → 取消选择（条目点击被 AppKit overlay 拦截，不会误触）
+        .onTapGesture {
+            model.clearSelection()
+        }
     }
 
-    /// 头部工具栏：货架切换 + 货架管理 + 条目数 + 清理失效 + 清空（V2-4）
+    /// 头部工具栏：货架切换 + 货架管理 + 条目数 + 多选操作 + 清理失效 + 清空（V2-4 / V2-6）
     private var header: some View {
         HStack(spacing: 6) {
             shelfSwitcher
@@ -199,6 +204,27 @@ struct ShelfPanelView: View {
             Text("\(model.items.count) 个文件")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
+            if !model.selectedIDs.isEmpty {
+                Text("已选 \(model.selectedIDs.count)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+                Button {
+                    model.pinSelection()
+                } label: {
+                    Image(systemName: "pin")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .help("置顶选中条目")
+                Button {
+                    Self.confirmAndDelete(ids: model.selectedIDs, model: model)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .help("删除选中条目（仅移除引用，不删除源文件）")
+            }
             if model.hasUnreachable {
                 Button {
                     model.clearUnreachable()
@@ -213,7 +239,7 @@ struct ShelfPanelView: View {
                 Button {
                     model.clearAll()
                 } label: {
-                    Image(systemName: "trash")
+                    Image(systemName: "xmark.bin")
                         .font(.system(size: 11))
                 }
                 .buttonStyle(.plain)
@@ -287,14 +313,62 @@ struct ShelfPanelView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     ForEach(model.items) { item in
-                        ShelfItemView(item: item) { moved in
-                            model.removeItem(moved)
+                        ShelfItemView(
+                            item: item,
+                            isSelected: model.selectedIDs.contains(item.id),
+                            selectedIDs: model.selectedIDs,
+                            selectedItems: model.selectedItems,
+                            onClick: { modifier, id in
+                                model.handleClick(modifier: modifier, id: id)
+                            },
+                            onMoveCompleted: { ids in
+                                model.removeItems(ids: ids)
+                            },
+                            onPin: { ids in
+                                model.pin(ids)
+                            },
+                            onDelete: { ids in
+                                Self.confirmAndDelete(ids: ids, model: model)
+                            }
+                        )
+                        .onDrag {
+                            // 排序手柄（条目底部条带，未被 file-promise overlay 覆盖）
+                            model.beginReorder(id: item.id)
+                            return NSItemProvider(object: item.id.uuidString as NSString)
                         }
                     }
                 }
                 .padding(10)
+                .onDrop(of: [.text], delegate: ReorderDropDelegate(
+                    sourceID: { model.activeReorderSourceID },
+                    itemCount: { model.items.count },
+                    onMove: { id, target in model.reorder(moving: id, to: target) },
+                    onCommit: { model.commitReorder() },
+                    onExit: { model.cancelReorder() }
+                ))
             }
         }
+    }
+
+    /// 删除选中（含确认）：>1 条或达到清空阈值时弹确认，只移除引用不删源文件。
+    /// 右键菜单批量删除与头部"删除选中"共用。
+    @MainActor
+    private static func confirmAndDelete(ids: Set<UUID>, model: ShelfPanelModel) {
+        guard !ids.isEmpty else { return }
+        let needsConfirm = SettingsStore.needsConfirmation(
+            itemCount: ids.count,
+            threshold: SettingsStore.shared.clearThreshold
+        )
+        if needsConfirm {
+            let alert = NSAlert()
+            alert.messageText = "删除选中的 \(ids.count) 个条目？"
+            alert.informativeText = "将移除选中的货架条目（仅移除引用，不会删除任何源文件）。"
+            alert.addButton(withTitle: "删除")
+            alert.addButton(withTitle: "取消")
+            alert.alertStyle = .warning
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        model.removeItems(ids: ids)
     }
 
     // MARK: - 货架管理操作（V2-4）
@@ -355,10 +429,18 @@ final class ShelfPanelModel: ObservableObject {
     @Published private(set) var shelves: [ShelfMeta] = []
     @Published private(set) var currentShelfName: String = ""
     @Published private(set) var selectedShelfID: UUID?
+    /// 选中条目 id 集合（V2-6 多选）
+    @Published private(set) var selectedIDs: Set<UUID> = []
     private let store: ShelfStore
     /// 条目数变化回调（菜单栏角标，体验增强 3.4）
     var onItemsChange: ((Int) -> Void)?
     private var clearAllObserver: NSObjectProtocol?
+    /// 多选状态（纯逻辑，anchor 用于 Shift 区间）
+    private var selection = ShelfSelection()
+    /// 拖拽排序源条目 id（onDrag 发起，drop 过程中有效）
+    var activeReorderSourceID: UUID? { reorderSourceID }
+    private var reorderSourceID: UUID?
+    private var originalOrderIDs: [UUID] = []
 
     init(store: ShelfStore) {
         self.store = store
@@ -398,6 +480,9 @@ final class ShelfPanelModel: ObservableObject {
         currentShelfName = await store.currentShelfName
         selectedShelfID = await store.currentShelf()?.id
         items = await store.all()
+        // 货架切换 / 数据重载后清空选中，避免残留选中指向已不在当前货架的条目
+        selection = ShelfSelection()
+        selectedIDs = []
         notifyCount()
     }
 
@@ -417,12 +502,91 @@ final class ShelfPanelModel: ObservableObject {
         }
     }
 
-    func removeItem(_ item: ShelfItem) {
+    // MARK: - 多选（V2-6）
+
+    /// 当前选中的条目（按货架顺序）
+    var selectedItems: [ShelfItem] {
+        items.filter { selectedIDs.contains($0.id) }
+    }
+
+    /// 点击（选择）统一入口：AppKit overlay 与 SwiftUI 空条目点击都走这里
+    func handleClick(modifier: SelectionModifier, id: UUID) {
+        switch modifier {
+        case .plain:
+            selection.selectOnly(id)
+        case .command:
+            selection.toggle(id)
+        case .shift:
+            selection.shift(id, order: items.map(\.id))
+        }
+        selectedIDs = selection.ids
+    }
+
+    /// 点击面板空白 → 取消选择
+    func clearSelection() {
+        selection.clear()
+        selectedIDs = []
+    }
+
+    /// 批量移除（删除选中 / 批量拖出），按 id 集合一次持久化
+    func removeItems(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        selection.remove(ids)
+        selectedIDs = selection.ids
         Task {
-            await store.remove(id: item.id)
+            await store.remove(ids: ids)
             items = await store.all()
             notifyCount()
         }
+    }
+
+    /// 置顶单个 / 一组条目（右键菜单或头部按钮），保持相对顺序
+    func pin(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        Task {
+            await store.pin(ids: ids)
+            items = await store.all()
+        }
+    }
+
+    func pinSelection() {
+        pin(selectedIDs)
+    }
+
+    // MARK: - 拖拽排序（V2-6）
+
+    /// onDrag 发起时记录源条目
+    func beginReorder(id: UUID) {
+        reorderSourceID = id
+        originalOrderIDs = items.map(\.id)
+    }
+
+    /// drop 实时反馈：本地乐观重排（不写盘，drop 结束一次性提交）
+    func reorder(moving id: UUID, to target: Int) {
+        guard reorderSourceID == id else { return }
+        let newItems = ReorderLogic.moving(items, id: id, to: target)
+        guard newItems.map(\.id) != items.map(\.id) else { return }
+        items = newItems
+    }
+
+    /// drop 结束：按最终顺序提交到 store（一次持久化）
+    func commitReorder() {
+        let order = items.map(\.id)
+        reorderSourceID = nil
+        originalOrderIDs = []
+        Task {
+            await store.reorder(by: order)
+            items = await store.all()
+        }
+    }
+
+    /// drop 移出面板：放弃本次排序，回滚到拖拽前顺序
+    func cancelReorder() {
+        guard reorderSourceID != nil else { return }
+        let original = originalOrderIDs
+        reorderSourceID = nil
+        originalOrderIDs = []
+        items = original.compactMap { id in items.first { $0.id == id } }
     }
 
     /// 是否存在失效条目（源文件已不可达）——决定是否显示"清理失效"按钮
@@ -500,28 +664,46 @@ final class ShelfPanelModel: ObservableObject {
     }
 }
 
-/// 条目视图：图标 + 名称 + 大小 + 来源路径
+/// 条目视图：图标 + 名称 + 大小 + 来源路径。
 /// 拖出（Spike S2）：不再用 `NSItemProvider(file URL)` 的复制语义。
-/// SwiftUI `.onDrag` 无法承载 NSFilePromiseProvider（Apple 确认），故 overlay 一个
+/// SwiftUI `.onDrag` 无法承载 NSFilePromiseProvider（Apple 确认），故 card 上 overlay 一个
 /// AppKit `FilePromiseDragView` 发起 promise 拖拽会话；Finder 兑现承诺时由
 /// `FilePromiseDragManager` 执行真实 moveItem，实现"拖出 = 移动 + 货架移除"。
+/// V2-6：card 底部另有一条排序手柄（未被 overlay 覆盖），供 `.onDrag` 拖拽排序；
+/// 选中态以高亮背景 + accent 描边呈现。
 struct ShelfItemView: View {
     let item: ShelfItem
-    /// 移动成功后的回调（通知货架移除该条目）
-    var onMoveCompleted: (ShelfItem) -> Void
+    var isSelected: Bool
+    var selectedIDs: Set<UUID>
+    var selectedItems: [ShelfItem]
+    /// 点击（选择）回调
+    var onClick: (SelectionModifier, UUID) -> Void
+    /// 批量移除回调（多文件拖出 / 单个拖出统一按 id 集合）
+    var onMoveCompleted: (Set<UUID>) -> Void
+    var onPin: (Set<UUID>) -> Void
+    var onDelete: (Set<UUID>) -> Void
 
-    @ViewBuilder
     var body: some View {
-        if item.isReachable {
-            content.overlay(
-                FilePromiseDragRepresentable(item: item, onMoveCompleted: onMoveCompleted)
-            )
-        } else {
-            content.opacity(0.6)
+        VStack(spacing: 3) {
+            cardBody
+                .opacity(item.isReachable ? 1.0 : 0.6)
+                .overlay(
+                    FilePromiseDragRepresentable(
+                        item: item,
+                        selectedIDs: selectedIDs,
+                        selectedItems: selectedItems,
+                        onClick: onClick,
+                        onMoveCompleted: onMoveCompleted,
+                        onPin: onPin,
+                        onDelete: onDelete
+                    )
+                )
+            reorderGrip
         }
+        .frame(width: 150)
     }
 
-    private var content: some View {
+    private var cardBody: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Image(systemName: item.isCloudPlaceholder ? "cloud" : "doc")
@@ -545,6 +727,66 @@ struct ShelfItemView: View {
         }
         .padding(8)
         .frame(width: 150, height: 56)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(
+            isSelected ? AnyShapeStyle(Color.accentColor.opacity(0.30))
+                       : AnyShapeStyle(.regularMaterial),
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 1.5)
+        )
+    }
+
+    /// 拖拽排序手柄：位于 card 下方，不被 file-promise overlay 覆盖，SwiftUI `.onDrag` 独占
+    private var reorderGrip: some View {
+        Image(systemName: "line.3.horizontal")
+            .font(.system(size: 10))
+            .foregroundStyle(.tertiary)
+            .frame(width: 40, height: 12)
+            .contentShape(Rectangle())
+    }
+}
+
+/// 面板内拖拽排序 drop 委托（横向布局）：按 drop 的 x 坐标换算目标槽位，
+/// 实时乐观重排，drop 结束一次性提交 store，移出面板则回滚。
+struct ReorderDropDelegate: DropDelegate {
+    /// 当前拖拽源条目 id（无 active 拖拽时返回 nil）
+    let sourceID: () -> UUID?
+    let itemCount: () -> Int
+    let onMove: (UUID, Int) -> Void
+    let onCommit: () -> Void
+    let onExit: () -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        // 仅响应我们自己的排序拖拽（有 active 源）；外部文本拖入直接拒绝
+        sourceID() != nil
+    }
+
+    func dropEntered(info: DropInfo) {
+        moveToDropPoint(info)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        moveToDropPoint(info)
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        onExit()
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        onCommit()
+        return true
+    }
+
+    private func moveToDropPoint(_ info: DropInfo) {
+        guard let id = sourceID() else { return }
+        let target = ReorderLogic.indexForX(
+            info.location.x,
+            count: itemCount()
+        )
+        onMove(id, target)
     }
 }

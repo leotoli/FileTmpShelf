@@ -1,13 +1,19 @@
 import AppKit
 import SwiftUI
 
-/// Spike S2：file promise 拖出发起视图。
+/// Spike S2：file promise 拖出发起视图。V2-6 扩展：多选点击 / 批量多文件拖出 / 右键菜单。
 ///
 /// SwiftUI 的 `.onDrag` 只能返回 `NSItemProvider`，而 file promise 需要
 /// `NSFilePromiseProvider`（二者都符合 NSPasteboardWriting 但无继承关系），
 /// Apple 已确认 `.onDrag` 无法直接承载 file promise。因此拖拽发起走 AppKit：
 /// 本视图以 overlay 形式盖在条目内容上，`mouseDown` 记录起点，`mouseDragged`
 /// 超过阈值（10pt）后用 `NSDraggingItem(pasteboardWriter: promise)` 发起拖拽会话。
+///
+/// V2-6 多文件拖出：被拖条目在选中集中且有多选时，为**每个**选中文件生成独立的
+/// `FilePromiseDragManager` + `CombinedFilePromiseProvider` + `NSDraggingItem`
+/// （每个 promise 都有自己的 delegate/manager，Finder 兑现时逐个回调）；
+/// 拖拽 frame 叠加小幅错位（fan-out）展示多文件。`onMoveCompleted` 对每个
+/// manager 回调时按整批 id 移除（`ShelfStore.remove(ids:)` 幂等去重）。
 ///
 /// 视图随 SwiftUI 条目生命周期存活，天然强持有 `FilePromiseDragManager`，
 /// 解决 NSFilePromiseProvider.delegate 是 weak、而 Finder 兑现承诺（拖放结束后
@@ -16,14 +22,37 @@ final class FilePromiseDragView: NSView {
     var item: ShelfItem? {
         didSet { updateInteractions() }
     }
-    var onMoveCompleted: ((ShelfItem) -> Void)? {
+    /// 当前选中集合（决定批量拖出集合 / 右键菜单"删除选中"）
+    var selectedItemIDs: Set<UUID> = [] {
+        didSet { updateInteractions() }
+    }
+    /// 当前选中的条目（批量拖出用，按货架顺序）
+    var selectedItems: [ShelfItem] = [] {
+        didSet { updateInteractions() }
+    }
+    /// 点击（选择）回调：modifier 分类 + 条目 id
+    var onClick: ((SelectionModifier, UUID) -> Void)? {
+        didSet { updateInteractions() }
+    }
+    /// 批量移除回调（Finder 兑现 promise / 非 promise 目标交付后按 id 集合移除）
+    var onMoveCompleted: ((Set<UUID>) -> Void)? {
+        didSet { updateInteractions() }
+    }
+    /// 右键菜单"置顶"回调
+    var onPin: ((Set<UUID>) -> Void)? {
+        didSet { updateInteractions() }
+    }
+    /// 右键菜单"删除"回调（UI 层负责批量确认）
+    var onDelete: ((Set<UUID>) -> Void)? {
         didSet { updateInteractions() }
     }
 
-    /// 当前拖拽会话的 manager；provider.delegate 是 weak，需随本视图生命周期强持有
-    private var activeManager: FilePromiseDragManager?
+    /// 当前拖拽会话的 manager 列表；provider.delegate 是 weak，需随本视图生命周期强持有
+    private var activeManagers: [FilePromiseDragManager] = []
     private var mouseDownLocation: CGPoint = .zero
     private var hasDraggingSession = false
+    /// 右键菜单待执行动作的条目集合
+    private var pendingActionIDs: Set<UUID> = []
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -57,6 +86,21 @@ final class FilePromiseDragView: NSView {
         alphaValue = 0.85
     }
 
+    override func mouseUp(with event: NSEvent) {
+        guard !hasDraggingSession else { return }
+        alphaValue = 1.0
+        guard let item else { return }
+        // 未拖动 = 点击 → 选择（Finder 语义：⌘ 切换 / Shift 区间 / 无修饰键单选）
+        let flags = event.modifierFlags
+        if flags.contains(.shift) {
+            onClick?(.shift, item.id)
+        } else if flags.contains(.command) {
+            onClick?(.command, item.id)
+        } else {
+            onClick?(.plain, item.id)
+        }
+    }
+
     override func mouseDragged(with event: NSEvent) {
         guard !hasDraggingSession else { return }
         guard let item, item.isReachable else { return }
@@ -68,33 +112,80 @@ final class FilePromiseDragView: NSView {
         // 位移阈值：区分"点击/滚动"与"拖拽"，与 Finder 条目手感一致
         guard distance > 10 else { return }
 
-        let manager = FilePromiseDragManager(item: item) { [weak self] moved in
-            self?.onMoveCompleted?(moved)
+        // V2-6 批量拖出：被拖条目在选中集中且多选 → 拖出整个选中集；否则仅拖出自身
+        var dragTargets: [ShelfItem]
+        if selectedItemIDs.contains(item.id), selectedItems.count > 1 {
+            dragTargets = selectedItems
+        } else {
+            dragTargets = [item]
         }
-        activeManager = manager
+        dragTargets = dragTargets.filter { $0.isReachable }
+        guard !dragTargets.isEmpty else { return }
 
-        // 子类化 NSFilePromiseProvider（Apple 官方做法，见 buckleyisms.com 拖拽指南）：
-        //   override writableTypes 追加 public.file-url + NSFilenamesPboardType。
-        // 相比"包装 writer"：系统仍识别它为 promise provider（Finder 兑现正常），
-        // 且追加类型会真实写入 pasteboard 类型列表（微信/iTerm2 能看到并接受）。
-        // 背景：仅 promise 时微信/iTerm2 收不到文件（它们需要 public.file-url）；
-        //       包装 writer 时类型列表可能缺失 fileURL（系统对 promise 特殊处理）。
-        let promise = CombinedFilePromiseProvider(
-            fileType: FilePromiseDragManager.promiseFileType(for: item),
-            delegate: manager,
-            fileURL: item.fileURL
-        )
-        let draggingItem = NSDraggingItem(pasteboardWriter: promise)
-        draggingItem.setDraggingFrame(
-            NSRect(origin: .zero, size: frame.size),
-            contents: snapshotImage()
-        )
-        beginDraggingSession(with: [draggingItem], event: event, source: self)
+        var managers: [FilePromiseDragManager] = []
+        var draggingItems: [NSDraggingItem] = []
+        let dragIDs = Set(dragTargets.map(\.id))
+        for (index, target) in dragTargets.enumerated() {
+            // 每个 promise 一个 manager；Finder 兑现（writePromiseToURL 成功）时
+            // 按整批 id 移除货架条目（幂等：remove(ids:) 按 id 去重，重复调用无害）
+            let manager = FilePromiseDragManager(item: target) { [weak self] _ in
+                self?.onMoveCompleted?(dragIDs)
+            }
+            managers.append(manager)
+
+            let promise = CombinedFilePromiseProvider(
+                fileType: FilePromiseDragManager.promiseFileType(for: target),
+                delegate: manager,
+                fileURL: target.fileURL
+            )
+            let draggingItem = NSDraggingItem(pasteboardWriter: promise)
+            // 多文件拖拽 frame 轻微错位（fan-out），展示"多个文件"而非重叠成一个
+            var dragFrame = NSRect(origin: .zero, size: frame.size)
+            dragFrame.origin.x += CGFloat(index) * 14
+            dragFrame.origin.y -= CGFloat(index) * 8
+            draggingItem.setDraggingFrame(dragFrame, contents: snapshotImage())
+            draggingItems.append(draggingItem)
+        }
+        activeManagers = managers
+        beginDraggingSession(with: draggingItems, event: event, source: self)
         hasDraggingSession = true
     }
 
+    // MARK: - 右键菜单（V2-6 置顶 / 删除）
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard let item, onPin != nil || onDelete != nil else { return }
+        let isMulti = selectedItemIDs.contains(item.id) && selectedItemIDs.count > 1
+        pendingActionIDs = isMulti ? selectedItemIDs : [item.id]
+
+        let menu = NSMenu()
+        if isMulti {
+            menu.addItem(withTitle: "置顶选中（\(selectedItemIDs.count) 项）", action: #selector(menuPin(_:)), keyEquivalent: "")
+            menu.addItem(withTitle: "删除选中（\(selectedItemIDs.count) 项）", action: #selector(menuDelete(_:)), keyEquivalent: "")
+        } else {
+            menu.addItem(withTitle: "置顶", action: #selector(menuPin(_:)), keyEquivalent: "")
+            menu.addItem(withTitle: "删除", action: #selector(menuDelete(_:)), keyEquivalent: "")
+        }
+        for menuItem in menu.items { menuItem.target = self }
+        let point = convert(event.locationInWindow, from: nil)
+        menu.popUp(positioning: nil, at: point, in: self)
+    }
+
+    @objc private func menuPin(_ sender: Any?) {
+        guard !pendingActionIDs.isEmpty else { return }
+        onPin?(pendingActionIDs)
+        pendingActionIDs = []
+    }
+
+    @objc private func menuDelete(_ sender: Any?) {
+        guard !pendingActionIDs.isEmpty else { return }
+        onDelete?(pendingActionIDs)
+        pendingActionIDs = []
+    }
+
     private func updateInteractions() {
-        isHidden = item.map { !$0.isReachable } ?? true
+        // 覆盖层常显（含不可达条目，用于选中 / 右键）；拖拽发起由 isReachable 守卫
+        isHidden = (item == nil)
     }
 
     private func snapshotImage() -> NSImage? {
@@ -121,15 +212,16 @@ extension FilePromiseDragView: NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         hasDraggingSession = false
         alphaValue = 1.0
-        // 非 promise 目标（微信/iTerm2 等）交付语义：拖拽会话结束且没有触发
-        // promise 兑现（activeManager 仍在 = move 未回调）→ 货架条目移除，
-        // 源文件保留原位（对方读取的是文件 URL 内容，文件本体仍在磁盘）。
-        // Finder 场景 move 成功会走 onMoveCompleted（activeManager 在成功时回调
-        // 后仍持有，但此时条目已被移除——幂等保护由 ShelfStore.remove 承担）。
-        if let item, let manager = activeManager, !manager.didCompleteMove {
-            onMoveCompleted?(item)
+        // 非 promise 目标（微信/iTerm2 等）交付语义：拖拽会话结束且未触发 promise
+        // 兑现的条目 → 移除货架条目（对方读取的是文件 URL 内容，文件本体仍在磁盘）。
+        // Finder 场景兑现成功的条目已由 onMoveCompleted 回调移除（remove(ids:) 幂等）。
+        if !activeManagers.isEmpty {
+            let remaining = activeManagers.filter { !$0.didCompleteMove }
+            if !remaining.isEmpty {
+                onMoveCompleted?(Set(remaining.map(\.itemID)))
+            }
         }
-        activeManager = nil
+        activeManagers = []
     }
 
     func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
@@ -141,18 +233,31 @@ extension FilePromiseDragView: NSDraggingSource {
 /// SwiftUI 桥接：以 overlay 挂到条目视图上，把拖拽发起从 `.onDrag` 换成 file promise。
 struct FilePromiseDragRepresentable: NSViewRepresentable {
     let item: ShelfItem
-    var onMoveCompleted: (ShelfItem) -> Void
+    var selectedIDs: Set<UUID>
+    var selectedItems: [ShelfItem]
+    var onClick: (SelectionModifier, UUID) -> Void
+    var onMoveCompleted: (Set<UUID>) -> Void
+    var onPin: (Set<UUID>) -> Void
+    var onDelete: (Set<UUID>) -> Void
 
     func makeNSView(context: Context) -> FilePromiseDragView {
         let view = FilePromiseDragView()
-        view.item = item
-        view.onMoveCompleted = onMoveCompleted
+        apply(view)
         return view
     }
 
     func updateNSView(_ nsView: FilePromiseDragView, context: Context) {
-        nsView.item = item
-        nsView.onMoveCompleted = onMoveCompleted
+        apply(nsView)
+    }
+
+    private func apply(_ view: FilePromiseDragView) {
+        view.item = item
+        view.selectedItemIDs = selectedIDs
+        view.selectedItems = selectedItems
+        view.onClick = onClick
+        view.onMoveCompleted = onMoveCompleted
+        view.onPin = onPin
+        view.onDelete = onDelete
     }
 }
 

@@ -255,8 +255,72 @@ actor ShelfStore {
         persist()
     }
 
+    /// 批量移除（多选删除 / 批量拖出）。幂等：不存在的 id 忽略，一次持久化。
+    func remove(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        let before = items.count
+        items.removeAll { ids.contains($0.id) }
+        guard items.count != before else { return }
+        persist()
+    }
+
     func removeAll() {
         items.removeAll()
+        persist()
+    }
+
+    // MARK: - 排序 / 置顶（V2-6）
+
+    /// 同货架内排序：把 `sourceID` 条目移动到 `destinationID` 之前（立即持久化）。
+    /// 任一 id 不在当前货架或二者相同为 no-op。
+    func moveItem(from sourceID: UUID, to destinationID: UUID) {
+        guard let destIndex = items.firstIndex(where: { $0.id == destinationID }),
+              let fromIndex = items.firstIndex(where: { $0.id == sourceID }),
+              fromIndex != destIndex else { return }
+        // 语义："移动到 destination 之前"。向下移（from < dest）时移除前部元素会使
+        // 目标前移 1，插入位置需减 1；向上移直接插入目标位。
+        let insertIndex = fromIndex < destIndex ? destIndex - 1 : destIndex
+        let item = items.remove(at: fromIndex)
+        items.insert(item, at: insertIndex)
+        persist()
+    }
+
+    /// 同货架内排序（按目标下标）：移动后该条目位于数组的 `destinationIndex` 位。
+    /// drop 实时反馈用，只更新内存数组不落盘；拖拽会话结束由 `reorder(by:)` 一次性提交。
+    func moveItem(from sourceID: UUID, toIndex destinationIndex: Int) {
+        guard let fromIndex = items.firstIndex(where: { $0.id == sourceID }) else { return }
+        let target = min(max(destinationIndex, 0), items.count - 1)
+        guard fromIndex != target else { return }
+        let item = items.remove(at: fromIndex)
+        items.insert(item, at: target)
+    }
+
+    /// 置顶单个条目：移到数组头部并持久化。
+    func pin(id: UUID) {
+        pin(ids: [id])
+    }
+
+    /// 置顶一组条目（保持它们当前的相对顺序，拼在剩余条目之前），一次持久化。
+    func pin(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        let pinned = items.filter { ids.contains($0.id) }
+        guard !pinned.isEmpty else { return }
+        let remaining = items.filter { !ids.contains($0.id) }
+        guard !remaining.isEmpty else { return }
+        let newOrder = pinned + remaining
+        guard newOrder.map(\.id) != items.map(\.id) else { return }
+        items = newOrder
+        persist()
+    }
+
+    /// 按 id 列表重排当前货架（拖拽排序 drop 结束一次性提交）。
+    /// 未知 id 忽略，数组中缺失的条目追加到末尾。
+    func reorder(by ids: [UUID]) {
+        var ordered = ids.compactMap { id in items.first { $0.id == id } }
+        let known = Set(ordered.map(\.id))
+        ordered += items.filter { !known.contains($0.id) }
+        guard ordered.map(\.id) != items.map(\.id) else { return }
+        items = ordered
         persist()
     }
 
