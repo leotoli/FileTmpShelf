@@ -470,16 +470,29 @@ final class CombinedFilePromiseWriterTests: XCTestCase {
         let types = writer.writableTypes(for: NSPasteboard(name: .general))
 
         XCTAssertTrue(types.contains(.fileURL), "应注册 public.file-url 供微信/终端读取")
+        XCTAssertTrue(
+            types.contains(NSPasteboard.PasteboardType("NSFilenamesPboardType")),
+            "应注册 NSFilenamesPboardType（iTerm2 等终端依赖）"
+        )
         // promise 类型：fileURL 是后加的，原生类型应保留（pboard 类型含 promised/dyn 或原 UTI）
-        XCTAssertTrue(types.count >= 2, "应同时有 promise 类型与 fileURL，实际: \(types)")
+        XCTAssertTrue(types.count >= 3, "应同时有 promise 类型 + fileURL + filenames，实际: \(types)")
     }
 
-    /// fileURL 类型的 pasteboard 值为源文件路径字符串（微信/iTerm2 可直接读）
-    func testFileURLPropertyListIsPath() throws {
+    /// fileURL 类型的 pasteboard 值为 file:/// 形式的 URL 字符串（微信/iTerm2 可直接读）
+    func testFileURLPropertyListIsURLString() throws {
         let (writer, url) = try makeWriter(named: "combined.txt")
         let value = writer.pasteboardPropertyList(forType: .fileURL)
 
-        XCTAssertEqual(value as? String, url.path, "public.file-url 应返回文件路径字符串")
+        XCTAssertEqual(value as? String, url.absoluteString, "public.file-url 应返回 file:/// URL 字符串")
+        XCTAssertTrue((value as? String)?.hasPrefix("file://") == true, "应以 file:// 开头")
+    }
+
+    /// NSFilenamesPboardType 返回路径数组（iTerm2 等老牌终端应用）
+    func testFilenamesTypeIsPathArray() throws {
+        let (writer, url) = try makeWriter(named: "combined.txt")
+        let value = writer.pasteboardPropertyList(forType: NSPasteboard.PasteboardType("NSFilenamesPboardType"))
+
+        XCTAssertEqual(value as? [String], [url.path], "NSFilenamesPboardType 应为路径数组")
     }
 
     /// 非 fileURL 类型（promise 类型）委托给内部 provider，不崩溃且返回有效数据

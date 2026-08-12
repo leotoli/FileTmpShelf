@@ -173,17 +173,27 @@ final class CombinedFilePromiseWriter: NSObject, NSPasteboardWriting {
 
     func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
         var types = promise.writableTypes(for: pasteboard)
-        // 追加真实文件 URL 类型（微信/iTerm2 等非 promise 目标需要）
+        // 追加真实文件 URL 类型（微信/iTerm2 等非 promise 目标需要）：
+        //   - public.file-url：标准值应为 file:/// 形式的 URL 字符串（不是纯路径）
+        //   - NSFilenamesPboardType：老式路径数组类型（iTerm2 等终端应用依赖）
         if !types.contains(.fileURL) {
             types.append(.fileURL)
+        }
+        let filenamesType = NSPasteboard.PasteboardType("NSFilenamesPboardType")
+        if !types.contains(filenamesType) {
+            types.append(filenamesType)
         }
         return types
     }
 
     func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
         if type == .fileURL {
-            // public.file-url 的标准表示：文件路径字符串
-            return fileURL.path
+            // public.file-url 的标准表示：file:/// 形式的 URL 字符串
+            return fileURL.absoluteString
+        }
+        if type.rawValue == "NSFilenamesPboardType" {
+            // 老式路径数组：["/path/to/file"]
+            return [fileURL.path]
         }
         return promise.pasteboardPropertyList(forType: type)
     }
