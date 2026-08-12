@@ -54,6 +54,10 @@ final class FilePromiseDragView: NSView {
     /// 右键菜单待执行动作的条目集合
     private var pendingActionIDs: Set<UUID> = []
 
+    /// 是否有正在进行的文件拖拽会话（全局；V2-7 空格预览在拖拽中不触发，
+    /// 避免拖出文件时误开 Quick Look）。拖拽开始置 true，会话结束置 false。
+    private(set) static var isDragging = false
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         updateInteractions()
@@ -147,6 +151,7 @@ final class FilePromiseDragView: NSView {
             draggingItems.append(draggingItem)
         }
         activeManagers = managers
+        Self.isDragging = true
         beginDraggingSession(with: draggingItems, event: event, source: self)
         hasDraggingSession = true
     }
@@ -186,6 +191,8 @@ final class FilePromiseDragView: NSView {
     private func updateInteractions() {
         // 覆盖层常显（含不可达条目，用于选中 / 右键）；拖拽发起由 isReachable 守卫
         isHidden = (item == nil)
+        // V2-7 预览提示：条目 hover 时提示空格预览（不可达条目无内容可预览，不提示）
+        toolTip = (item?.isReachable == true) ? "空格预览" : nil
     }
 
     private func snapshotImage() -> NSImage? {
@@ -211,6 +218,7 @@ extension FilePromiseDragView: NSDraggingSource {
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         hasDraggingSession = false
+        Self.isDragging = false
         alphaValue = 1.0
         // 非 promise 目标（微信/iTerm2 等）交付语义：拖拽会话结束且未触发 promise
         // 兑现的条目 → 移除货架条目（对方读取的是文件 URL 内容，文件本体仍在磁盘）。

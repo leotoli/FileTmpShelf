@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import Carbon.HIToolbox
 
 /// 浮动面板控制器：NSPanel 无边框、置顶、不抢焦点。
 /// Spike S4 目标：验证面板作为拖入目标 + 拖出源的双向拖放行为。
@@ -12,6 +13,12 @@ final class ShelfPanelController: NSObject {
     private var panelOpacity: Double
     /// 程序化定位时置 true，抑制 didMove 反算持久化（只保存用户真实拖动结果）
     private var suppressPositionSave = false
+    /// Quick Look 预览（V2-7）：QLPreviewPanel 单例的 dataSource/delegate
+    private let quickLook = QuickLookController()
+    /// 空格预览的当前选中集（ShelfPanelView 模型推送，空格按下时读取）
+    private var previewSelection = PreviewSelection()
+    /// 空格键 keyDown 本地监听（面板有关键焦点时触发预览切换）
+    private var keyDownMonitor: Any?
 
     /// 条目数变化回调（菜单栏角标用，体验增强 3.4）
     var onItemCountChange: ((Int) -> Void)?
@@ -21,6 +28,12 @@ final class ShelfPanelController: NSObject {
         self.positionStore = positionStore
         self.panelOpacity = settings.panelOpacity
         super.init()
+    }
+
+    deinit {
+        if let keyDownMonitor {
+            NSEvent.removeMonitor(keyDownMonitor)
+        }
     }
 
     var isVisible: Bool {
@@ -48,6 +61,8 @@ final class ShelfPanelController: NSObject {
     }
 
     func hide() {
+        // 生命周期（V2-7）：面板关闭时 Quick Look 预览一并关闭
+        quickLook.close()
         panel?.orderOut(nil)
     }
 
@@ -81,6 +96,7 @@ final class ShelfPanelController: NSObject {
     }
 
     private func createPanel() {
+        installQuickLookMonitor()
         let newPanel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 188),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -89,7 +105,9 @@ final class ShelfPanelController: NSObject {
         )
         newPanel.level = .floating
         newPanel.isFloatingPanel = true
-        newPanel.becomesKeyOnlyIfNeeded = true
+        // V2-7：需接收键盘事件（空格预览）。becomesKeyOnlyIfNeeded=false 让点击面板即
+        // 成为 key window（仍 nonactivating，不抢其他 app 焦点），空格才能到达本地监听。
+        newPanel.becomesKeyOnlyIfNeeded = false
         newPanel.isMovableByWindowBackground = true
         newPanel.hidesOnDeactivate = false
         newPanel.backgroundColor = .clear
@@ -101,6 +119,8 @@ final class ShelfPanelController: NSObject {
         let content = NSHostingView(
             rootView: ShelfPanelView(store: store) { [weak self] count in
                 self?.onItemCountChange?(count)
+            } onPreviewStateChange: { [weak self] selection in
+                self?.handlePreviewStateChange(selection)
             }
         )
         newPanel.contentView = content
@@ -165,15 +185,62 @@ final class ShelfPanelController: NSObject {
         }
         positionStore.save(from: frame, in: visible)
     }
+
+    // MARK: - Quick Look 预览（V2-7）
+
+    /// 安装空格键 keyDown 本地监听（createPanel 时调用，随面板生命周期存活）。
+    /// 选择「本地监听」而非 responder 链：面板是 nonactivating NSPanel，SwiftUI 内容
+    /// 没有固定 first responder，无法可靠把空格路由到条目视图；本地监听在事件派发前
+    /// 可见所有 keyDown，配合「面板是关键窗口」判断即可精确响应。
+    func installQuickLookMonitor() {
+        guard keyDownMonitor == nil else { return }
+        keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handleSpaceKeyDown(event) ?? event
+        }
+    }
+
+    /// 空格（kVK_Space = 49）→ 切换 Quick Look。无修饰键、面板可见且有关键焦点才响应；
+    /// 拖拽会话进行中不触发（避免拖出文件时误开预览）。
+    private func handleSpaceKeyDown(_ event: NSEvent) -> NSEvent? {
+        guard event.keyCode == UInt16(kVK_Space) else { return event }
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard modifiers.isEmpty else { return event }
+
+        // ① 已打开我们的预览 → 空格关闭（与 Finder 语义一致，且避免空格穿透到预览面板）
+        if quickLook.isShowingOurs {
+            quickLook.close()
+            return nil
+        }
+        // ② 拖拽中不触发
+        guard !FilePromiseDragView.isDragging else { return event }
+        // ③ 仅面板可见且是关键窗口（用户焦点在面板上）时打开；设置窗口/其他窗口不响应
+        guard let panel, panel.isVisible, panel === NSApp.keyWindow else { return event }
+        quickLook.toggle(selection: previewSelection)
+        return nil
+    }
+
+    /// 面板模型推送预览状态（选中集 + 焦点条目）：记录最新集合并处理清空时的生命周期。
+    private func handlePreviewStateChange(_ selection: PreviewSelection) {
+        previewSelection = selection
+        // 选中集清空而预览仍打开 → 一并关闭（移除最后选中项后不应残留预览）
+        if selection.items.isEmpty, quickLook.isShowingOurs {
+            quickLook.close()
+        }
+    }
 }
 
 /// 面板 SwiftUI 内容
 struct ShelfPanelView: View {
     @StateObject private var model: ShelfPanelModel
 
-    init(store: ShelfStore, onItemsChange: ((Int) -> Void)? = nil) {
+    init(
+        store: ShelfStore,
+        onItemsChange: ((Int) -> Void)? = nil,
+        onPreviewStateChange: ((PreviewSelection) -> Void)? = nil
+    ) {
         _model = StateObject(wrappedValue: ShelfPanelModel(store: store))
         _model.wrappedValue.onItemsChange = onItemsChange
+        _model.wrappedValue.onPreviewStateChange = onPreviewStateChange
     }
 
     var body: some View {
@@ -434,6 +501,8 @@ final class ShelfPanelModel: ObservableObject {
     private let store: ShelfStore
     /// 条目数变化回调（菜单栏角标，体验增强 3.4）
     var onItemsChange: ((Int) -> Void)?
+    /// Quick Look 预览状态回调（V2-7）：每次选中/取消/移除/重载后推送可预览集 + 焦点
+    var onPreviewStateChange: ((PreviewSelection) -> Void)?
     private var clearAllObserver: NSObjectProtocol?
     /// 多选状态（纯逻辑，anchor 用于 Shift 区间）
     private var selection = ShelfSelection()
@@ -483,6 +552,7 @@ final class ShelfPanelModel: ObservableObject {
         // 货架切换 / 数据重载后清空选中，避免残留选中指向已不在当前货架的条目
         selection = ShelfSelection()
         selectedIDs = []
+        notifyPreviewState()
         notifyCount()
     }
 
@@ -509,6 +579,22 @@ final class ShelfPanelModel: ObservableObject {
         items.filter { selectedIDs.contains($0.id) }
     }
 
+    /// 当前可预览的条目集（仅可达，V2-7）——空格预览的候选集
+    var previewItems: [ShelfItem] {
+        selectedItems.filter(\.isReachable)
+    }
+
+    /// 预览焦点条目 id：最后一次非 Shift 点击的条目（selection.anchor），
+    /// 多选时空格预览从它开始；无锚点回退第一个选中项（由 QuickLookPreviewLogic 兜底）
+    var previewFocusedID: UUID? {
+        selection.anchor
+    }
+
+    /// 推送当前预览状态（选中集 + 焦点）到控制器（空格触发时使用）
+    private func notifyPreviewState() {
+        onPreviewStateChange?(PreviewSelection(items: previewItems, focusedID: previewFocusedID))
+    }
+
     /// 点击（选择）统一入口：AppKit overlay 与 SwiftUI 空条目点击都走这里
     func handleClick(modifier: SelectionModifier, id: UUID) {
         switch modifier {
@@ -520,12 +606,14 @@ final class ShelfPanelModel: ObservableObject {
             selection.shift(id, order: items.map(\.id))
         }
         selectedIDs = selection.ids
+        notifyPreviewState()
     }
 
     /// 点击面板空白 → 取消选择
     func clearSelection() {
         selection.clear()
         selectedIDs = []
+        notifyPreviewState()
     }
 
     /// 批量移除（删除选中 / 批量拖出），按 id 集合一次持久化
@@ -533,6 +621,7 @@ final class ShelfPanelModel: ObservableObject {
         guard !ids.isEmpty else { return }
         selection.remove(ids)
         selectedIDs = selection.ids
+        notifyPreviewState()
         Task {
             await store.remove(ids: ids)
             items = await store.all()
