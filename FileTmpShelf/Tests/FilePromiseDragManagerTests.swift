@@ -434,7 +434,7 @@ final class FilePromiseDragManagerTests: XCTestCase {
     }
 }
 
-/// CombinedFilePromiseWriter：一次拖拽同时提供 file promise（Finder）+ 真实文件 URL
+/// CombinedFilePromiseProvider：一次拖拽同时提供 file promise（Finder）+ 真实文件 URL
 /// （微信/iTerm2 等非 promise 目标）——修复"拖到微信/终端根本没出现文件"。
 @MainActor
 final class CombinedFilePromiseWriterTests: XCTestCase {
@@ -450,18 +450,19 @@ final class CombinedFilePromiseWriterTests: XCTestCase {
         try? FileManager.default.removeItem(at: tempDir)
     }
 
-    private func makeWriter(named name: String) throws -> (CombinedFilePromiseWriter, URL) {
+    private func makeWriter(named name: String) throws -> (CombinedFilePromiseProvider, URL) {
         let url = tempDir.appendingPathComponent(name)
         try Data("payload".utf8).write(to: url)
         guard let item = ShelfItem.make(from: url) else {
             throw XCTSkip("无法构造 ShelfItem")
         }
         let manager = FilePromiseDragManager(item: item) { _ in }
-        let provider = NSFilePromiseProvider(
+        let provider = CombinedFilePromiseProvider(
             fileType: FilePromiseDragManager.promiseFileType(for: item),
-            delegate: manager
+            delegate: manager,
+            fileURL: item.fileURL
         )
-        return (CombinedFilePromiseWriter(promise: provider, fileURL: item.fileURL), url)
+        return (provider, url)
     }
 
     /// writableTypes 同时含 promise 类型与 public.file-url（微信/iTerm2 需要的）
@@ -495,12 +496,11 @@ final class CombinedFilePromiseWriterTests: XCTestCase {
         XCTAssertEqual(value as? [String], [url.path], "NSFilenamesPboardType 应为路径数组")
     }
 
-    /// 非 fileURL 类型（promise 类型）委托给内部 provider，不崩溃且返回有效数据
+    /// 非 fileURL 类型（promise 类型）由 super（NSFilePromiseProvider）处理，不崩溃且返回有效数据
     func testPromiseTypesDelegateToProvider() throws {
         let (writer, _) = try makeWriter(named: "combined.bin")
-        let provider = writer.promise
-        // provider 原生声明的前 N 个类型应能通过包装 writer 取到（不为 nil 或可懒加载）
-        let providerTypes = provider.writableTypes(for: NSPasteboard(name: .general))
+        // provider 原生声明的前 N 个类型应能通过 override 后的 writer 取到（不为 nil 或可懒加载）
+        let providerTypes = writer.writableTypes(for: NSPasteboard(name: .general))
         let first = providerTypes.first
         if let first {
             // 要么直接有值，要么进入懒加载兜底不崩溃（数据由 pasteboard(_:item:provideDataForType:) 提供）

@@ -73,16 +73,18 @@ final class FilePromiseDragView: NSView {
         }
         activeManager = manager
 
-        let promise = NSFilePromiseProvider(
+        // 子类化 NSFilePromiseProvider（Apple 官方做法，见 buckleyisms.com 拖拽指南）：
+        //   override writableTypes 追加 public.file-url + NSFilenamesPboardType。
+        // 相比"包装 writer"：系统仍识别它为 promise provider（Finder 兑现正常），
+        // 且追加类型会真实写入 pasteboard 类型列表（微信/iTerm2 能看到并接受）。
+        // 背景：仅 promise 时微信/iTerm2 收不到文件（它们需要 public.file-url）；
+        //       包装 writer 时类型列表可能缺失 fileURL（系统对 promise 特殊处理）。
+        let promise = CombinedFilePromiseProvider(
             fileType: FilePromiseDragManager.promiseFileType(for: item),
-            delegate: manager
+            delegate: manager,
+            fileURL: item.fileURL
         )
-        // 组合 pasteboard writer：同时提供
-        //   1) file promise（Finder 消费 → 触发真实移动 mv）
-        //   2) 真实文件 URL（微信/iTerm2 等非 promise 目标消费 → 直接可读）
-        // 否则拖到微信/终端"根本没出现文件"（NSFilePromiseProvider 只有 Finder 认识）。
-        let writer = CombinedFilePromiseWriter(promise: promise, fileURL: item.fileURL)
-        let draggingItem = NSDraggingItem(pasteboardWriter: writer)
+        let draggingItem = NSDraggingItem(pasteboardWriter: promise)
         draggingItem.setDraggingFrame(
             NSRect(origin: .zero, size: frame.size),
             contents: snapshotImage()
@@ -154,25 +156,36 @@ struct FilePromiseDragRepresentable: NSViewRepresentable {
     }
 }
 
-/// 组合 pasteboard writer：让一次拖拽同时提供 file promise（Finder 消费 → 真实移动）
-/// 和真实文件 URL（微信/iTerm2 等非 promise 目标消费 → 直接可读文件）。
+/// 子类化 NSFilePromiseProvider：在 promise 类型之外追加真实文件 URL 类型。
 ///
 /// 背景（用户反馈 V2-M2 验收）：仅用 NSFilePromiseProvider 时拖到微信/iTerm2
-/// "根本没出现文件"——因为只有 Finder 等支持 promise 协议的目标才会请求兑现，
-/// 微信/终端需要的是 `public.file-url` 数据。二者缺一不可：
-///   - Finder：看到 promised-file 类型 → 触发 `writePromiseToURL` → 我们 moveItem（真实移动）
-///   - 微信/iTerm2：看到 public.file-url → 直接读取源文件
-final class CombinedFilePromiseWriter: NSObject, NSPasteboardWriting {
-    let promise: NSFilePromiseProvider
-    let fileURL: URL
+/// "根本没出现文件"——微信/终端需要 `public.file-url` / `NSFilenamesPboardType`，
+/// 而 promise 类型只有 Finder 等支持 promise 协议的目标才消费。
+///
+/// 为什么用"子类"而不是"包装 writer"（CombinedFilePromiseWriter）：
+/// 系统对 NSDraggingItem 的 promise 拖拽有特殊处理——包装 writer 时追加的
+/// fileURL 类型可能不会真实进入 pasteboard 类型列表（iTerm2 判定
+/// `availableTypeFromArray:@[NSPasteboardTypeFileURL]` 看不到 → 直接拒绝）。
+/// 子类化后系统仍识别为 promise provider（Finder 兑现正常），同时 override
+/// writableTypes 追加的类型会真实写入类型列表。
+final class CombinedFilePromiseProvider: NSFilePromiseProvider {
+    var fileURL: URL = URL(fileURLWithPath: "/")
 
-    init(promise: NSFilePromiseProvider, fileURL: URL) {
-        self.promise = promise
+    init(fileType: String, delegate: NSFilePromiseProviderDelegate?, fileURL: URL) {
         self.fileURL = fileURL
+        super.init()   // NSFilePromiseProvider() 是 designated init；fileType/delegate 通过属性设置
+        self.fileType = fileType
+        self.delegate = delegate
     }
 
-    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
-        var types = promise.writableTypes(for: pasteboard)
+    required init?(coder: NSCoder) {
+        // NSFilePromiseProvider 的 coder init 不在 Swift 可见的 designated 链中，
+        // 但我们从不真正解码 provider（拖拽 item 不归档），用 () 初始化即可。
+        super.init()
+    }
+
+    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        var types = super.writableTypes(for: pasteboard)
         // 追加真实文件 URL 类型（微信/iTerm2 等非 promise 目标需要）：
         //   - public.file-url：标准值应为 file:/// 形式的 URL 字符串（不是纯路径）
         //   - NSFilenamesPboardType：老式路径数组类型（iTerm2 等终端应用依赖）
@@ -186,7 +199,7 @@ final class CombinedFilePromiseWriter: NSObject, NSPasteboardWriting {
         return types
     }
 
-    func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+    override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
         if type == .fileURL {
             // public.file-url 的标准表示：file:/// 形式的 URL 字符串
             return fileURL.absoluteString
@@ -195,15 +208,6 @@ final class CombinedFilePromiseWriter: NSObject, NSPasteboardWriting {
             // 老式路径数组：["/path/to/file"]
             return [fileURL.path]
         }
-        return promise.pasteboardPropertyList(forType: type)
-    }
-
-    func pasteboard(_ pasteboard: NSPasteboard, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
-        // 懒加载兜底：非 fileURL 类型也通过 promise 的属性列表生成。
-        // （NSFilePromiseProvider 无 pasteboard(_:item:provideDataForType:) 方法，
-        //   promise 数据由其 pasteboardPropertyList 直接提供，这里仅做安全转发。）
-        if let data = pasteboardPropertyList(forType: type) {
-            item.setPropertyList(data, forType: type)
-        }
+        return super.pasteboardPropertyList(forType: type)
     }
 }
