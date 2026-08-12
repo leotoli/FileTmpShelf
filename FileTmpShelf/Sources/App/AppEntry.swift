@@ -155,7 +155,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 无法路由到 SwiftUI Settings 场景，设置窗口从未被创建。
         // 改为 AppDelegate 手动持有设置窗口（NSWindow + SettingsView），
         // 保持系统设置窗口观感（标题栏/可关闭），与 Settings 场景并存。
-        if settingsWindow == nil {
+        if settingsWindow == nil || !(settingsWindow?.isVisible ?? false) {
+            // ⚠️ 关闭动画崩溃根因（本地复现 15:17/15:18）：
+            // willClose 里 settingsWindow = nil 会释放窗口唯一强引用 → 窗口在
+            // 关闭动画（_NSWindowTransformAnimation）期间被释放 → dealloc 悬垂崩溃。
+            // 正确做法：窗口关闭后保持强引用（默认 isReleasedWhenClosed=false 窗口
+            // 只是隐藏），这里检测不可见 → 重建窗口，旧窗口自然释放（非动画期间）。
             let content = NSHostingView(rootView: SettingsView())
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
@@ -184,7 +189,9 @@ struct SettingsView: View {
     @State private var recordingMonitor: Any?
     @State private var hotKeyError: String?
     @State private var launchAtLoginError: String?
-    @State private var shelfStore = ShelfStore()
+    /// 使用全局共享实例（崩溃修复：@State 独立实例每次 init 创建新 actor，
+    /// 与面板实例并发操作同一存储 → 悬垂崩溃；shared 由 actor 隔离串行化）
+    @State private var shelfStore = ShelfStore.shared
 
     var body: some View {
         Form {

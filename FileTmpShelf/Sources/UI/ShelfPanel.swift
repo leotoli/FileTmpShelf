@@ -6,7 +6,8 @@ import UniformTypeIdentifiers
 /// Spike S4 目标：验证面板作为拖入目标 + 拖出源的双向拖放行为。
 final class ShelfPanelController: NSObject {
     private var panel: NSPanel?
-    private let store = ShelfStore()
+    /// 全局共享实例（崩溃修复：独立实例与设置页并发操作同一存储 → 悬垂崩溃）
+    private let store = ShelfStore.shared
     private let settings: SettingsStore
     private let positionStore: PanelPositionStore
     private var panelOpacity: Double

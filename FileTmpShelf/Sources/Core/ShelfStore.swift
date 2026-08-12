@@ -96,6 +96,13 @@ actor ShelfStore {
     /// 迁移/默认货架名称
     static let defaultShelfName = "默认货架"
 
+    /// 全局共享实例（V2-6 崩溃修复）：
+    /// SettingsView 的 @State 每次 init 创建新 ShelfStore actor，与面板的
+    /// ShelfStore 实例并发操作同一存储目录。跨实例无锁文件操作 + @State
+    /// 初始化闭包在视图重建时的生命周期问题 → objc_retain 悬垂崩溃。
+    /// 统一用同一 actor 实例（Swift actor 隔离天然串行化，消除并发）。
+    static let shared = ShelfStore()
+
     private let baseURL: URL
     /// 非 nil = 旧版单文件模式（构造时传 .json 文件路径，向后兼容）
     private let legacyFileURL: URL?
