@@ -60,6 +60,9 @@ final class ShelfPanelController: NSObject {
             guard count > 0 else { return }
 
             if SettingsStore.needsConfirmation(itemCount: count, threshold: settings.clearThreshold) {
+                // Bug1 修复：nonactivating accessory app 的 runModal 确认框在未激活时
+                // 可能无法弹出/异常 → 先激活（accessory 激活不会抢 Dock 焦点）
+                NSApp.activate(ignoringOtherApps: true)
                 let alert = NSAlert()
                 alert.messageText = "确定清空货架？"
                 alert.informativeText = "将移除 \(count) 个货架条目（仅移除引用，不会删除任何源文件）。"
@@ -330,6 +333,8 @@ struct ShelfPanelView: View {
 
     private func deleteShelf() {
         guard model.shelves.count > 1 else { return }
+        // Bug1 修复：nonactivating accessory app 的 runModal 需先激活
+        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "删除货架「\(model.currentShelfName)」？"
         alert.informativeText = "将删除该货架及其 \(model.items.count) 个条目引用（仅移除引用，不会删除任何源文件）。"
@@ -343,6 +348,8 @@ struct ShelfPanelView: View {
     /// 文本输入弹窗（新建/重命名共用）：确定返回输入文本（空名视为取消），取消返回 nil
     @MainActor
     private static func promptText(title: String, message: String?, defaultText: String) -> String? {
+        // Bug1 修复：nonactivating accessory app 的 runModal 需先激活
+        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = title
         if let message {

@@ -16,6 +16,13 @@ struct FileTmpShelfApp: App {
 
 /// 应用委托：负责菜单栏常驻、全局热键注册、面板生命周期、设置应用。
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// 类级强引用（根治 objc_retain 悬垂崩溃）：
+    /// SwiftUI `@NSApplicationDelegateAdaptor` 在 accessory app（无主窗口场景）
+    /// 的某些生命周期路径下可能释放 AppDelegate；menu item target 指向本实例，
+    /// 若被释放 → 点击菜单 objc_retain EXC_BAD_ACCESS。启动时把 self 存入
+    /// static 持有，保证 AppDelegate 永不释放（与 adaptor 创建的是同一实例）。
+    private static weak var liveReference: AppDelegate?
+    private static var retained: AppDelegate?
     private var statusItem: NSStatusItem?
     private var hotKeyManager: HotKeyManager?
     private var panelController: ShelfPanelController?
@@ -26,6 +33,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastPanelOpacity: Double = SettingsStore.shared.panelOpacity
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 根治悬垂崩溃：static 强持有 self（同一实例），保证菜单 target 永不失效
+        Self.liveReference = self
+        Self.retained = self
+
         NSApp.setActivationPolicy(.accessory)
 
         // 菜单栏
@@ -219,10 +230,20 @@ struct SettingsView: View {
             }
 
             Section("外观") {
-                HStack {
-                    Text("面板透明度")
-                    Slider(value: $store.panelOpacity, in: 0.5...1.0) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
                         Text("面板透明度")
+                        Spacer()
+                        // 当前百分比显示（Bug 修复：原实现无百分比，且 Slider 内 accessibility
+                        // label 的 Text("面板透明度") 被渲染为可见文本导致"出现二次"）
+                        Text("\(Int(store.panelOpacity * 100))%")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(value: $store.panelOpacity, in: 0.5...1.0) {
+                        // 空 accessibility label：外部 HStack 已有可见标签，避免重复渲染
+                        EmptyView()
                     } minimumValueLabel: {
                         Text("50%")
                             .font(.caption)
