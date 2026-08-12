@@ -51,8 +51,6 @@ final class FilePromiseDragManager: NSObject, NSFilePromiseProviderDelegate {
     }
 
     private let item: ShelfItem
-    /// 条目 id（批量拖出 / 会话结束时按 id 集合移除用）
-    var itemID: UUID { item.id }
     private let fileManager: FileManager
     /// 移动成功后的回调（在 MainActor 上执行），用于通知货架移除条目
     private let onMoveCompleted: (ShelfItem) -> Void
