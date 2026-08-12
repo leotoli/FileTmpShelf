@@ -433,3 +433,90 @@ final class FilePromiseDragManagerTests: XCTestCase {
         )
     }
 }
+
+/// CombinedFilePromiseWriter：一次拖拽同时提供 file promise（Finder）+ 真实文件 URL
+/// （微信/iTerm2 等非 promise 目标）——修复"拖到微信/终端根本没出现文件"。
+@MainActor
+final class CombinedFilePromiseWriterTests: XCTestCase {
+    private var tempDir: URL!
+
+    override func setUpWithError() throws {
+        tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CombinedWriterTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: tempDir)
+    }
+
+    private func makeWriter(named name: String) throws -> (CombinedFilePromiseWriter, URL) {
+        let url = tempDir.appendingPathComponent(name)
+        try Data("payload".utf8).write(to: url)
+        guard let item = ShelfItem.make(from: url) else {
+            throw XCTSkip("无法构造 ShelfItem")
+        }
+        let manager = FilePromiseDragManager(item: item) { _ in }
+        let provider = NSFilePromiseProvider(
+            fileType: FilePromiseDragManager.promiseFileType(for: item),
+            delegate: manager
+        )
+        return (CombinedFilePromiseWriter(promise: provider, fileURL: item.fileURL), url)
+    }
+
+    /// writableTypes 同时含 promise 类型与 public.file-url（微信/iTerm2 需要的）
+    func testWritableTypesIncludeFileURLAndPromise() throws {
+        let (writer, _) = try makeWriter(named: "combined.pdf")
+        let types = writer.writableTypes(for: NSPasteboard(name: .general))
+
+        XCTAssertTrue(types.contains(.fileURL), "应注册 public.file-url 供微信/终端读取")
+        // promise 类型：fileURL 是后加的，原生类型应保留（pboard 类型含 promised/dyn 或原 UTI）
+        XCTAssertTrue(types.count >= 2, "应同时有 promise 类型与 fileURL，实际: \(types)")
+    }
+
+    /// fileURL 类型的 pasteboard 值为源文件路径字符串（微信/iTerm2 可直接读）
+    func testFileURLPropertyListIsPath() throws {
+        let (writer, url) = try makeWriter(named: "combined.txt")
+        let value = writer.pasteboardPropertyList(forType: .fileURL)
+
+        XCTAssertEqual(value as? String, url.path, "public.file-url 应返回文件路径字符串")
+    }
+
+    /// 非 fileURL 类型（promise 类型）委托给内部 provider，不崩溃且返回有效数据
+    func testPromiseTypesDelegateToProvider() throws {
+        let (writer, _) = try makeWriter(named: "combined.bin")
+        let provider = writer.promise
+        // provider 原生声明的前 N 个类型应能通过包装 writer 取到（不为 nil 或可懒加载）
+        let providerTypes = provider.writableTypes(for: NSPasteboard(name: .general))
+        let first = providerTypes.first
+        if let first {
+            // 要么直接有值，要么进入懒加载兜底不崩溃（数据由 pasteboard(_:item:provideDataForType:) 提供）
+            _ = writer.pasteboardPropertyList(forType: first)
+        }
+        XCTAssertGreaterThan(providerTypes.count, 0, "provider 应声明至少一个 promise 类型")
+    }
+
+    /// didCompleteMove 初始为 false，move 成功后才为 true（区分 Finder 移动 vs 非 promise 交付）
+    func testDidCompleteMoveFlag() throws {
+        let (item, srcURL) = try makeItem(named: "moveflag.txt")
+        let manager = FilePromiseDragManager(item: item) { _ in }
+        XCTAssertFalse(manager.didCompleteMove, "初始应为 false")
+
+        // 同卷成功移动 → didCompleteMove = true
+        let dest = tempDir.appendingPathComponent("moveflag-dest.txt")
+        let exp = expectation(description: "move")
+        manager.moveAndNotify(to: dest) { _ in exp.fulfill() }
+        wait(for: [exp], timeout: 5)
+        XCTAssertTrue(manager.didCompleteMove, "move 成功后应为 true")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: srcURL.path), "同卷移动后源应消失")
+    }
+
+    private func makeItem(named name: String) throws -> (ShelfItem, URL) {
+        let url = tempDir.appendingPathComponent(name)
+        try Data("payload".utf8).write(to: url)
+        guard let item = ShelfItem.make(from: url) else {
+            throw XCTSkip("无法构造 ShelfItem")
+        }
+        return (item, url)
+    }
+}

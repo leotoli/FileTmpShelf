@@ -77,7 +77,12 @@ final class FilePromiseDragView: NSView {
             fileType: FilePromiseDragManager.promiseFileType(for: item),
             delegate: manager
         )
-        let draggingItem = NSDraggingItem(pasteboardWriter: promise)
+        // 组合 pasteboard writer：同时提供
+        //   1) file promise（Finder 消费 → 触发真实移动 mv）
+        //   2) 真实文件 URL（微信/iTerm2 等非 promise 目标消费 → 直接可读）
+        // 否则拖到微信/终端"根本没出现文件"（NSFilePromiseProvider 只有 Finder 认识）。
+        let writer = CombinedFilePromiseWriter(promise: promise, fileURL: item.fileURL)
+        let draggingItem = NSDraggingItem(pasteboardWriter: writer)
         draggingItem.setDraggingFrame(
             NSRect(origin: .zero, size: frame.size),
             contents: snapshotImage()
@@ -114,6 +119,15 @@ extension FilePromiseDragView: NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         hasDraggingSession = false
         alphaValue = 1.0
+        // 非 promise 目标（微信/iTerm2 等）交付语义：拖拽会话结束且没有触发
+        // promise 兑现（activeManager 仍在 = move 未回调）→ 货架条目移除，
+        // 源文件保留原位（对方读取的是文件 URL 内容，文件本体仍在磁盘）。
+        // Finder 场景 move 成功会走 onMoveCompleted（activeManager 在成功时回调
+        // 后仍持有，但此时条目已被移除——幂等保护由 ShelfStore.remove 承担）。
+        if let item, let manager = activeManager, !manager.didCompleteMove {
+            onMoveCompleted?(item)
+        }
+        activeManager = nil
     }
 
     func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
@@ -137,5 +151,49 @@ struct FilePromiseDragRepresentable: NSViewRepresentable {
     func updateNSView(_ nsView: FilePromiseDragView, context: Context) {
         nsView.item = item
         nsView.onMoveCompleted = onMoveCompleted
+    }
+}
+
+/// 组合 pasteboard writer：让一次拖拽同时提供 file promise（Finder 消费 → 真实移动）
+/// 和真实文件 URL（微信/iTerm2 等非 promise 目标消费 → 直接可读文件）。
+///
+/// 背景（用户反馈 V2-M2 验收）：仅用 NSFilePromiseProvider 时拖到微信/iTerm2
+/// "根本没出现文件"——因为只有 Finder 等支持 promise 协议的目标才会请求兑现，
+/// 微信/终端需要的是 `public.file-url` 数据。二者缺一不可：
+///   - Finder：看到 promised-file 类型 → 触发 `writePromiseToURL` → 我们 moveItem（真实移动）
+///   - 微信/iTerm2：看到 public.file-url → 直接读取源文件
+final class CombinedFilePromiseWriter: NSObject, NSPasteboardWriting {
+    let promise: NSFilePromiseProvider
+    let fileURL: URL
+
+    init(promise: NSFilePromiseProvider, fileURL: URL) {
+        self.promise = promise
+        self.fileURL = fileURL
+    }
+
+    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        var types = promise.writableTypes(for: pasteboard)
+        // 追加真实文件 URL 类型（微信/iTerm2 等非 promise 目标需要）
+        if !types.contains(.fileURL) {
+            types.append(.fileURL)
+        }
+        return types
+    }
+
+    func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        if type == .fileURL {
+            // public.file-url 的标准表示：文件路径字符串
+            return fileURL.path
+        }
+        return promise.pasteboardPropertyList(forType: type)
+    }
+
+    func pasteboard(_ pasteboard: NSPasteboard, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+        // 懒加载兜底：非 fileURL 类型也通过 promise 的属性列表生成。
+        // （NSFilePromiseProvider 无 pasteboard(_:item:provideDataForType:) 方法，
+        //   promise 数据由其 pasteboardPropertyList 直接提供，这里仅做安全转发。）
+        if let data = pasteboardPropertyList(forType: type) {
+            item.setPropertyList(data, forType: type)
+        }
     }
 }

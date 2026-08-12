@@ -54,6 +54,10 @@ final class FilePromiseDragManager: NSObject, NSFilePromiseProviderDelegate {
     private let fileManager: FileManager
     /// 移动成功后的回调（在 MainActor 上执行），用于通知货架移除条目
     private let onMoveCompleted: (ShelfItem) -> Void
+    /// 是否已完成 promise 兑现（Finder 真实移动）。拖拽会话结束时若为 false
+    /// 且会话已结束 → 判定为"非 promise 目标交付"（微信/iTerm2 读取文件 URL），
+    /// 由视图层负责移除货架条目。
+    private(set) var didCompleteMove = false
     /// 跨卷判定注入点：nil 时用真实卷标识比较（volumeIdentifier）；
     /// 测试用同一文件系统的不同顶层目录模拟"两个卷"（volumeIdentifier 相同，无法自判）。
     private let volumeResolver: ((URL, URL) -> Bool)?
@@ -127,6 +131,7 @@ final class FilePromiseDragManager: NSObject, NSFilePromiseProviderDelegate {
         performMove(to: url) { [weak self] result in
             switch result {
             case .success:
+                self?.didCompleteMove = true
                 completionHandler(nil)
                 self?.notifyMoveCompleted()
             case .failure(let error):
