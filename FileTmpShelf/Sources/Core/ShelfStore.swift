@@ -11,6 +11,11 @@ struct ShelfItem: Identifiable, Codable, Equatable {
     var sourceParentPath: String // 来源父目录（UI 展示"来自哪里"）
     var addedAt: Date
     var isCloudPlaceholder: Bool // iCloud 占位文件（未下载）
+    var isDirectory: Bool     // 是否为目录（V3 文件夹支持）
+
+    private enum CodingKeys: String, CodingKey {
+        case id, path, displayName, fileSize, sourceParentPath, addedAt, isCloudPlaceholder, isDirectory
+    }
 
     init(
         id: UUID = UUID(),
@@ -19,7 +24,8 @@ struct ShelfItem: Identifiable, Codable, Equatable {
         fileSize: Int64,
         sourceParentPath: String,
         addedAt: Date = Date(),
-        isCloudPlaceholder: Bool = false
+        isCloudPlaceholder: Bool = false,
+        isDirectory: Bool = false
     ) {
         self.id = id
         self.path = path
@@ -28,6 +34,21 @@ struct ShelfItem: Identifiable, Codable, Equatable {
         self.sourceParentPath = sourceParentPath
         self.addedAt = addedAt
         self.isCloudPlaceholder = isCloudPlaceholder
+        self.isDirectory = isDirectory
+    }
+
+    /// 向后兼容解码：旧数据（V1/V2）无 `isDirectory` 字段 → 默认 false。
+    /// 自定义 init(from:) 使旧 `shelf-*.json` 反序列化不报错。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        path = try c.decode(String.self, forKey: .path)
+        displayName = try c.decode(String.self, forKey: .displayName)
+        fileSize = try c.decode(Int64.self, forKey: .fileSize)
+        sourceParentPath = try c.decode(String.self, forKey: .sourceParentPath)
+        addedAt = try c.decode(Date.self, forKey: .addedAt)
+        isCloudPlaceholder = try c.decodeIfPresent(Bool.self, forKey: .isCloudPlaceholder) ?? false
+        isDirectory = try c.decodeIfPresent(Bool.self, forKey: .isDirectory) ?? false
     }
 
     /// 从文件 URL 构建条目（不复制文件本体）
@@ -67,7 +88,8 @@ struct ShelfItem: Identifiable, Codable, Equatable {
             displayName: url.lastPathComponent,
             fileSize: fileSize,
             sourceParentPath: url.deletingLastPathComponent().path,
-            isCloudPlaceholder: isPlaceholder
+            isCloudPlaceholder: isPlaceholder,
+            isDirectory: values.isDirectory == true
         )
     }
 

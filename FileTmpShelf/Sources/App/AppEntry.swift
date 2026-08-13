@@ -174,12 +174,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             window.title = "FileTmpShelf 设置"
             window.contentView = content
-            window.center()
             // ⚠️ 关键：设置 isReleasedWhenClosed = false
             // 这样关闭窗口时窗口不会立即释放，而是保持强引用在 AppDelegate 中
             window.isReleasedWhenClosed = false
             settingsWindow = window
         }
+        
+        // 跟随工作区：每次打开定位到鼠标所在屏幕居中（与货架面板一致）
+        centerSettingsWindowOnActiveScreen()
         
         // 显示/置顶已有窗口
         NSApp.activate(ignoringOtherApps: true)
@@ -188,6 +190,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !settingsWindow!.isVisible {
             settingsWindow?.orderFrontRegardless()
         }
+    }
+
+    /// 设置窗口居中到鼠标当前所在屏幕（跟随工作区，与货架面板定位语义一致）。
+    /// 复用 PanelPositioning.targetScreenIndex 确定目标屏；鼠标不在任何屏 → 主屏兜底。
+    private func centerSettingsWindowOnActiveScreen() {
+        guard let window = settingsWindow else { return }
+        let screens = NSScreen.screens
+        guard !screens.isEmpty else {
+            window.center()
+            return
+        }
+        let fallbackIndex = screens.firstIndex { $0 === NSScreen.main } ?? 0
+        let index = PanelPositioning.targetScreenIndex(
+            mouseLocation: NSEvent.mouseLocation,
+            screenFrames: screens.map(\.frame),
+            fallbackIndex: fallbackIndex
+        )
+        let visibleFrame = screens[index].visibleFrame
+        let size = window.frame.size
+        let origin = NSPoint(
+            x: visibleFrame.midX - size.width / 2,
+            y: visibleFrame.midY - size.height / 2
+        )
+        window.setFrameOrigin(origin)
     }
 
     @objc private func quit() {

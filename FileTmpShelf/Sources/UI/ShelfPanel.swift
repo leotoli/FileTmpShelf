@@ -52,6 +52,11 @@ final class ShelfPanelController: NSObject {
         //（ignoringOtherApps 不抢 Dock 焦点，与 Alfred/Spotlight 行为一致）
         NSApp.activate(ignoringOtherApps: true)
         panel.orderFrontRegardless()
+        // V3 修复：副屏全屏 app 下 Menu/NSAlert 无法弹出 —— 根因是 nonactivating
+        // panel 未成为 key window，SwiftUI Menu 与 runModal 都依赖 key window。
+        // activate 后显式 makeKey 让 panel 变 key（不激活 app，只接管键盘焦点），
+        // 货架切换 Menu 与新建/重命名/删除弹窗才能正常弹出。
+        panel.makeKey()
         // Escape 键监听：面板可见时监听，隐藏时移除（避免全局监听泄漏）
         startEscapeMonitor()
     }
@@ -320,8 +325,12 @@ struct ShelfPanelView: View {
             Button("删除当前货架…", role: .destructive) { deleteShelf() }
                 .disabled(model.shelves.count <= 1)
         } label: {
-            Image(systemName: "gearshape")
-                .font(.system(size: 11))
+            HStack(spacing: 3) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 11))
+                Text("货架管理")
+                    .font(.system(size: 11))
+            }
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -666,11 +675,30 @@ struct ShelfItemView: View {
         }
     }
 
+    /// 条目图标三态（V3 文件夹支持）：
+    /// - iCloud 占位 → `cloud` 灰色（不可达，不参与拖出）
+    /// - 目录 → `folder.fill` 蓝色 tint（与文件明显区别）
+    /// - 普通文件 → `doc` 默认色
+    @ViewBuilder
+    private var itemIcon: some View {
+        if item.isCloudPlaceholder {
+            Image(systemName: "cloud")
+                .font(.system(size: 20))
+                .foregroundStyle(.secondary)
+        } else if item.isDirectory {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 20))
+                .foregroundStyle(.tint)
+        } else {
+            Image(systemName: "doc")
+                .font(.system(size: 20))
+        }
+    }
+
     private var content: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Image(systemName: item.isCloudPlaceholder ? "cloud" : "doc")
-                    .font(.system(size: 20))
+                itemIcon
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.displayName)
                         .font(.system(size: 12, weight: .medium))

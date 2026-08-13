@@ -118,10 +118,35 @@ final class ShelfStoreTests: XCTestCase {
         XCTAssertEqual(items[0].displayName, "bundle")
         XCTAssertEqual(items[0].sourceParentPath, tempDir.path)
         XCTAssertEqual(items[0].fileSize, 0, "文件夹不应展示目录条目元数据大小")
+        XCTAssertTrue(items[0].isDirectory, "文件夹应标记 isDirectory=true（V3 文件夹支持）")
         XCTAssertTrue(items[0].isReachable)
 
         // 目录内文件真实存在（零拷贝：本体未被改动）
         XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("sub/inner.txt").path))
+    }
+
+    /// 文件条目 isDirectory=false：普通文件不应被误标为目录
+    func testRegularFileIsNotDirectory() async throws {
+        let store = ShelfStore(storageURL: tempDir.appendingPathComponent("shelf-regular.json"))
+        let file = try makeTestFile(named: "plain.txt", content: "plain")
+        _ = await store.addBatch([file])
+        let items = await store.all()
+        XCTAssertEqual(items.count, 1)
+        XCTAssertFalse(items[0].isDirectory, "普通文件 isDirectory 应为 false")
+    }
+
+    /// V3 向后兼容：旧数据（无 isDirectory 字段）解码后默认 false，不抛错
+    func testLegacyItemDecodesWithoutIsDirectoryField() throws {
+        // 手工构造一份 V2 旧格式 JSON（无 isDirectory 键）
+        let legacyJSON = """
+        [{"id":"11111111-1111-1111-1111-111111111111","path":"/tmp/legacy.txt","displayName":"legacy.txt","fileSize":10,"sourceParentPath":"/tmp","addedAt":0,"isCloudPlaceholder":false}]
+        """
+        let data = Data(legacyJSON.utf8)
+        let items = try JSONDecoder().decode([ShelfItem].self, from: data)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].displayName, "legacy.txt")
+        XCTAssertFalse(items[0].isDirectory, "旧数据无 isDirectory 字段应默认 false")
+        XCTAssertFalse(items[0].isCloudPlaceholder)
     }
 
     /// 符号链接：指向存在目标的链接可挂载，displayName 用链接自身名称，大小取目标文件大小
