@@ -27,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyManager: HotKeyManager?
     private var panelController: ShelfPanelController?
     private var settingsWindow: NSWindow?
+    /// 菜单栏「发现新版本」菜单项（启动静默检查发现新版时插入，防止重复插入）
+    private var updateMenuItem: NSMenuItem?
     private let settings = SettingsStore.shared
     private var settingsCancellable: AnyCancellable?
     private var lastHotKey: (keyCode: UInt32, modifiers: NSEvent.ModifierFlags)?
@@ -86,6 +88,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsCancellable = settings.objectWillChange.sink { [weak self] in
             self?.applySettings()
         }
+
+        // V4-1 手动更新：启动静默检查（每天最多 1 次），发现新版菜单栏插入提醒项
+        checkForUpdatesSilently()
+    }
+
+    // MARK: - V4-1 手动更新
+
+    /// 启动静默检查（节流：每天最多 1 次）。发现新版 → 菜单栏插入「发现新版本」项。
+    /// 静默失败：无网络 / API 限流 / 无 Release 均不打扰用户（决策 1：菜单栏静默提醒）。
+    private func checkForUpdatesSilently() {
+        let key = "lastUpdateCheckDate"
+        if let last = UserDefaults.standard.object(forKey: key) as? Date,
+           Calendar.current.isDateInToday(last) {
+            return
+        }
+        UserDefaults.standard.set(Date(), forKey: key)
+
+        Task { [weak self] in
+            let result = await UpdateChecker.check(currentVersion: AppInfo.version())
+            if case .updateAvailable(_, let latest, let url) = result {
+                await MainActor.run {
+                    self?.showUpdateAvailable(latest: latest, releaseURL: url)
+                }
+            }
+        }
+    }
+
+    /// 菜单栏插入「发现新版本」菜单项（静默提醒，不弹窗）。幂等：已插入则跳过。
+    private func showUpdateAvailable(latest: String, releaseURL: URL) {
+        guard updateMenuItem == nil, let menu = statusItem?.menu else { return }
+        let item = NSMenuItem(
+            title: "🆕 发现新版本 \(latest)",
+            action: #selector(openUpdatePage(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        item.representedObject = releaseURL
+        // 插入在「显示/隐藏货架」之后、分隔线之前
+        menu.insertItem(item, at: 1)
+        updateMenuItem = item
+    }
+
+    /// 打开 Releases 网页（「前往下载」动作，决策 2：打开网页不直接下载）
+    @objc private func openUpdatePage(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func registerHotKey(_ hotKey: HotKeyManager) {
@@ -343,6 +391,13 @@ struct SettingsView: View {
                     .buttonStyle(.link)
                     .help("在浏览器中打开 GitHub 仓库")
                 }
+                HStack {
+                    Text("版本更新")
+                    Spacer()
+                    Button("检查更新") { checkForUpdates() }
+                        .buttonStyle(.link)
+                        .help("检查 GitHub Releases 是否有新版本")
+                }
                 Text("基于 MIT 许可证开源发布，源码见 GitHub 仓库。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -351,6 +406,37 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 460)
         .onDisappear { stopRecording() }
+    }
+
+    /// 手动检查更新（V4-1）：请求 Releases API，用 NSAlert 展示结果。
+    /// 有新版 → 「前往下载」打开 Releases 网页（决策 2）。
+    private func checkForUpdates() {
+        Task {
+            let result = await UpdateChecker.check(currentVersion: AppInfo.version())
+            await MainActor.run {
+                let alert = NSAlert()
+                switch result {
+                case .upToDate(let current):
+                    alert.messageText = "已是最新版本"
+                    alert.informativeText = "当前版本 \(current) 已是最新。"
+                    alert.addButton(withTitle: "好")
+                case .updateAvailable(let current, let latest, let url):
+                    alert.messageText = "发现新版本 \(latest)"
+                    alert.informativeText = "当前版本 \(current)。是否前往下载？"
+                    alert.addButton(withTitle: "前往下载")
+                    alert.addButton(withTitle: "稍后")
+                    if alert.runModal() == .alertFirstButtonReturn {
+                        NSWorkspace.shared.open(url)
+                    }
+                    return
+                case .failed(let message):
+                    alert.messageText = "检查更新失败"
+                    alert.informativeText = message
+                    alert.addButton(withTitle: "好")
+                }
+                alert.runModal()
+            }
+        }
     }
 
     private var hotKeyLabel: String {
