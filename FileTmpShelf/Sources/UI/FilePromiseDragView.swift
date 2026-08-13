@@ -218,7 +218,7 @@ struct FilePromiseDragRepresentable: NSViewRepresentable {
 /// 子类化 NSFilePromiseProvider：在 promise 类型之外追加真实文件 URL 类型。
 ///
 /// 背景（用户反馈 V2-M2 验收）：仅用 NSFilePromiseProvider 时拖到微信/iTerm2
-/// "根本没出现文件"——微信/终端需要 `public.file-url` / `NSFilenamesPboardType`，
+/// "根本没出现文件"——微信/终端需要 `public.file-url`，
 /// 而 promise 类型只有 Finder 等支持 promise 协议的目标才消费。
 ///
 /// 为什么用"子类"而不是"包装 writer"（CombinedFilePromiseWriter）：
@@ -244,14 +244,13 @@ final class CombinedFilePromiseProvider: NSFilePromiseProvider {
     override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
         var types = super.writableTypes(for: pasteboard)
         // 追加真实文件 URL 类型（微信/iTerm2 等非 promise 目标需要）：
-        //   - public.file-url：标准值应为 file:/// 形式的 URL 字符串（不是纯路径）
-        //   - NSFilenamesPboardType：老式路径数组类型（iTerm2 等终端应用依赖）
+        //   public.file-url：标准值应为 file:/// 形式的 URL 字符串（不是纯路径）
+        // 注：不再追加 NSFilenamesPboardType——它是废弃的 pboard 类型常量、
+        // 不是 UTI（UTType 解析为 nil），AppKit 在 writableTypes 里返回它会被
+        // 拒绝并刷「not a valid UTI」警告，且从未真正进入类型列表（死代码）。
+        // 微信/iTerm2 的兼容实际由 public.file-url 承担（C-9 清理）。
         if !types.contains(.fileURL) {
             types.append(.fileURL)
-        }
-        let filenamesType = NSPasteboard.PasteboardType("NSFilenamesPboardType")
-        if !types.contains(filenamesType) {
-            types.append(filenamesType)
         }
         return types
     }
@@ -261,22 +260,18 @@ final class CombinedFilePromiseProvider: NSFilePromiseProvider {
             // public.file-url 的标准表示：file:/// 形式的 URL 字符串
             return fileURL.absoluteString
         }
-        if type.rawValue == "NSFilenamesPboardType" {
-            // 老式路径数组：["/path/to/file"]
-            return [fileURL.path]
-        }
         return super.pasteboardPropertyList(forType: type)
     }
 
     /// 关键（buckleyisms.com 指南）：子类化追加类型时必须 override writingOptions。
-    /// 追加的非文件类型（fileURL/filenames）返回空选项（标准写入），
+    /// 追加的非文件类型（fileURL）返回空选项（标准写入），
     /// promise 类型返回 super（保留 promise 兑现语义）。缺失此方法会导致
     /// Finder 对拖拽的兑现/类型处理异常（Bug4 的 UUID 文件 + .textClipping）。
     override func writingOptions(
         forType type: NSPasteboard.PasteboardType,
         pasteboard: NSPasteboard
     ) -> NSPasteboard.WritingOptions {
-        if type == .fileURL || type.rawValue == "NSFilenamesPboardType" {
+        if type == .fileURL {
             return []
         }
         return super.writingOptions(forType: type, pasteboard: pasteboard)
