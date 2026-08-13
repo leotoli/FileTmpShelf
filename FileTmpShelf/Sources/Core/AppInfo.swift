@@ -11,6 +11,6 @@ enum AppInfo {
         if let version = info["CFBundleShortVersionString"] as? String, !version.isEmpty {
             return version
         }
-        return "0.1.0"
+        return "0.1.1"
     }
 }

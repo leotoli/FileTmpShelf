@@ -1,5 +1,24 @@
 # FileTmpShelf Release Notes
 
+## v0.1.1 — 跳转访达 + 细节修复（2026-08-14）
+
+### 新功能
+
+- **⌘↩ 跳转访达**：货架中选中一个文件后按 `⌘↩`，在 Finder 中定位并高亮显示该文件（仅单选；多选 / 无选中时忽略）
+
+### 修复
+
+- **多文件拖出**：修复拖出多个文件时，首文件移动后其余文件显示「不可达」且条目残留的问题
+- **⌘↩ 稳定性**：跳转访达改用 Carbon 全局热键（同 ⌥X 机制），修复全屏 app 场景下「只能弹一次访达」/「有时失败」的竞态
+- **废弃警告清理**：移除 `NSFilenamesPboardType`（废弃 pboard 类型、非 UTI），拖拽不再刷 `not a valid UTI` 日志警告
+
+### 安装
+
+- 从 [GitHub Releases](https://github.com/leotoli/FileTmpShelf/releases/latest) 下载 `FileTmpShelf-0.1.1.dmg`
+- 本版本已 **Developer ID 签名 + 公证**，正常安装无 Gatekeeper 拦截
+
+---
+
 ## v0.1.0 — 首个公开版本（2026-08-13）
 
 FileTmpShelf 首个公开版本。常驻菜单栏的「临时文件货架」：按快捷键唤出浮动面板，把文件/文件夹的路径暂时挂上去，拖到系统任意位置即完成真实移动。

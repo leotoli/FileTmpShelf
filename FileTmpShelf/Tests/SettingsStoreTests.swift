@@ -143,8 +143,8 @@ final class SettingsStoreTests: XCTestCase {
     func testAppInfoVersion() {
         XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": "0.1.0"]), "0.1.0")
         XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": "2.0.3"]), "2.0.3")
-        XCTAssertEqual(AppInfo.version(from: [:]), "0.1.0", "缺失版本号应回退默认")
-        XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": ""]), "0.1.0", "空版本号应回退默认")
+        XCTAssertEqual(AppInfo.version(from: [:]), "0.1.1", "缺失版本号应回退默认")
+        XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": ""]), "0.1.1", "空版本号应回退默认")
     }
 
     func testAppInfoRepoURL() {
