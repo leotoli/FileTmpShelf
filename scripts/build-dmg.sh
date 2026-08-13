@@ -27,9 +27,11 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 APP_NAME="FileTmpShelf"
 CONFIGURATION="${CONFIGURATION:-Release}"
 XCODEPROJ="$ROOT_DIR/FileTmpShelf/$APP_NAME.xcodeproj"
-DERIVED_DATA="$ROOT_DIR/FileTmpShelf/build/DerivedData"
+# 构建产物放 /tmp，避免 build/DerivedData 与 dist/staging 里的 .app 被 Spotlight 索引
+# （用户多次反馈聚焦搜索出现多个 FileTmpShelf.app）
+DERIVED_DATA="${TMPDIR:-/tmp}/fts-release-build"
 DIST_DIR="$ROOT_DIR/dist"
-STAGING_DIR="$DIST_DIR/staging"
+STAGING_DIR="${TMPDIR:-/tmp}/fts-staging"
 APP_BUILT="$DERIVED_DATA/Build/Products/$CONFIGURATION/$APP_NAME.app"
 
 echo "==> [1/4] Release 构建（${CONFIGURATION}）..."
