@@ -17,8 +17,17 @@ final class ShelfPanelController: NSObject {
     /// 条目数变化回调（菜单栏角标用，体验增强 3.4）
     var onItemCountChange: ((Int) -> Void)?
 
-    /// Escape 键监听器（面板可见时生效，隐藏面板；隐藏时移除）
+    /// 面板视图模型（V5-1 跳转访达：controller 需访问选中状态以响应 ⌘↩）
+    private var panelModel: ShelfPanelModel?
+
+    /// 键盘事件监听器（面板可见时生效，隐藏时移除）：Escape 关闭
     private var keyEventMonitor: Any?
+
+    /// ⌘↩ 跳转访达的 Carbon 全局热键（面板可见时注册，隐藏时注销）。
+    /// 用 Carbon 热键而非 local monitor 的原因（V5-1 全屏场景修复）：
+    /// ⌘↩ 弹访达会激活 Finder → 本 app 失活 → local monitor 收不到后续事件；
+    /// Carbon 全局热键不依赖 app active，Finder 激活后仍能响应 ⌘↩。
+    private var revealHotKey: HotKeyManager?
 
     init(settings: SettingsStore = SettingsStore.shared, positionStore: PanelPositionStore = PanelPositionStore()) {
         self.settings = settings
@@ -57,13 +66,16 @@ final class ShelfPanelController: NSObject {
         // activate 后显式 makeKey 让 panel 变 key（不激活 app，只接管键盘焦点），
         // 货架切换 Menu 与新建/重命名/删除弹窗才能正常弹出。
         panel.makeKey()
-        // Escape 键监听：面板可见时监听，隐藏时移除（避免全局监听泄漏）
-        startEscapeMonitor()
+        // Escape 关闭（local monitor）
+        startKeyMonitor()
+        // ⌘↩ 跳转访达（Carbon 全局热键，面板可见时注册）
+        startRevealHotKey()
     }
 
     func hide() {
         panel?.orderOut(nil)
-        stopEscapeMonitor()
+        stopKeyMonitor()
+        stopRevealHotKey()
     }
 
     /// 清空货架（体验缺陷 2.2）：超过设置阈值时确认；≤阈值直接清空；
@@ -98,15 +110,16 @@ final class ShelfPanelController: NSObject {
         panel?.alphaValue = value
     }
 
-    // MARK: - Escape 键关闭（V2 增强）
+    // MARK: - 键盘监听（Escape 关闭 + ⌘↩ 跳转访达）
 
     /// 面板可见时启动 Escape 键监听；重复调用幂等（已有监听则跳过）。
-    private func startEscapeMonitor() {
+    private func startKeyMonitor() {
         guard keyEventMonitor == nil else { return }
         keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            // kVK_Escape = 53
+            guard let self else { return event }
+            // kVK_Escape = 53 → 关闭面板
             if event.keyCode == 53 {
-                self?.hide()
+                self.hide()
                 return nil
             }
             return event
@@ -114,10 +127,56 @@ final class ShelfPanelController: NSObject {
     }
 
     /// 面板隐藏时移除 Escape 键监听；幂等。
-    private func stopEscapeMonitor() {
+    private func stopKeyMonitor() {
         if let monitor = keyEventMonitor {
             NSEvent.removeMonitor(monitor)
             keyEventMonitor = nil
+        }
+    }
+
+    /// 面板可见时注册 ⌘↩ Carbon 全局热键（跳转访达）；幂等。
+    private func startRevealHotKey() {
+        guard revealHotKey == nil else { return }
+        let hotKey = HotKeyManager(
+            keyCode: HotKeyManager.keyCodeForReturn,
+            modifiers: [.command],
+            hotKeyID: 2
+        )
+        hotKey.onTrigger = { [weak self] in
+            self?.revealSelectionInFinder()
+        }
+        do {
+            try hotKey.register()
+            revealHotKey = hotKey
+        } catch {
+            // ⌘↩ 被占用（罕见）→ 静默降级为不可用，不崩溃
+            print("[ShelfPanel] ⌘↩ 热键注册失败: \(error)")
+        }
+    }
+
+    /// 面板隐藏时注销 ⌘↩ 全局热键；幂等。
+    private func stopRevealHotKey() {
+        revealHotKey?.unregister()
+        revealHotKey = nil
+    }
+
+    /// V5-1 跳转访达：仅单选（恰好选中 1 个）时，在 Finder 中定位并高亮显示该文件。
+    /// 多选 / 无选中 → 忽略（决策 2：仅单选）。
+    /// 注意：本方法由 ⌘↩ 的 Carbon 全局热键触发，不依赖本 app active，
+    /// 因此 activateFileViewerSelecting 激活 Finder 后无需 reclaim（全屏场景也不再竞态）。
+    private func revealSelectionInFinder() {
+        let selected = panelModel?.selectedItems ?? []
+        guard selected.count == 1, let item = selected.first, item.isReachable else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([item.fileURL])
+    }
+
+    /// 重新激活本 app + 面板变 key，让 local keyEventMonitor（Escape）持续收键盘事件。
+    /// 触发源：从 Finder 拖文件进面板后，拖拽源 Finder 保持 active → 本 app 失活。
+    /// 延迟 0.5s 等拖拽会话结束（拖放不切 Space，0.5s 足够）。
+    private func reclaimKeyStatus() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            NSApp.activate(ignoringOtherApps: true)
+            self?.panel?.makeKey()
         }
     }
 
@@ -139,10 +198,18 @@ final class ShelfPanelController: NSObject {
         newPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         newPanel.alphaValue = panelOpacity
 
+        let model = ShelfPanelModel(store: store)
+        panelModel = model
         let content = NSHostingView(
-            rootView: ShelfPanelView(store: store, onDismiss: { [weak self] in
-                self?.hide()
-            }) { [weak self] count in
+            rootView: ShelfPanelView(
+                model: model,
+                onDismiss: { [weak self] in
+                    self?.hide()
+                },
+                onReclaimKey: { [weak self] in
+                    self?.reclaimKeyStatus()
+                }
+            ) { [weak self] count in
                 self?.onItemCountChange?(count)
             }
         )
@@ -212,17 +279,25 @@ final class ShelfPanelController: NSObject {
 
 /// 面板 SwiftUI 内容
 struct ShelfPanelView: View {
-    @StateObject private var model: ShelfPanelModel
+    @ObservedObject var model: ShelfPanelModel
 
     /// 面板关闭回调（header 关闭按钮 + Escape 键触发）
     var onDismiss: (() -> Void)?
+    /// 拖放完成后重新激活回调（V5-1：从 Finder 拖文件后 reclaim key，保证键盘监听持续）
+    var onReclaimKey: (() -> Void)?
     /// 面板宽度用于自适应布局（V2 固定 520，后续可调整）
     private let panelWidth: CGFloat = 520
 
-    init(store: ShelfStore, onDismiss: (() -> Void)? = nil, onItemsChange: ((Int) -> Void)? = nil) {
-        _model = StateObject(wrappedValue: ShelfPanelModel(store: store))
-        _model.wrappedValue.onItemsChange = onItemsChange
+    init(
+        model: ShelfPanelModel,
+        onDismiss: (() -> Void)? = nil,
+        onReclaimKey: (() -> Void)? = nil,
+        onItemsChange: ((Int) -> Void)? = nil
+    ) {
+        self.model = model
+        self.model.onItemsChange = onItemsChange
         self.onDismiss = onDismiss
+        self.onReclaimKey = onReclaimKey
     }
 
     var body: some View {
@@ -235,6 +310,9 @@ struct ShelfPanelView: View {
         .frame(width: 520, height: 204)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             model.addDroppedFiles(providers)
+            // V5-1 修复：从 Finder 拖文件后，拖拽源 Finder 保持 active → 本 app 失活 →
+            // 键盘监听失效。拖放完成后 reclaim key（延迟到拖拽会话结束）。
+            onReclaimKey?()
             return true
         }
         // 注：空白点击清空选择不做 SwiftUI 手势（会干扰条目 overlay 点击，Bug3 教训）；

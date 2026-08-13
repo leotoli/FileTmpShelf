@@ -117,9 +117,14 @@ final class FilePromiseDragView: NSView {
         let dragIDs = Set(dragTargets.map(\.id))
         for (index, target) in dragTargets.enumerated() {
             // 每个 promise 一个 manager；Finder 兑现（writePromiseToURL 成功）时
-            // 按整批 id 移除货架条目（幂等：remove(ids:) 按 id 去重，重复调用无害）
-            let manager = FilePromiseDragManager(item: target) { [weak self] _ in
-                self?.onMoveCompleted?(target)
+            // 按整批 id 移除货架条目。
+            // ⚠️ 修复（多文件首文件移动后其余显示不可达）：不能 `[weak self]` 捕获视图——
+            // 首文件兑现移除条目后，发起拖拽的视图被销毁、self 变 nil，其余文件的
+            // 移除回调全部失效（源已移动但条目残留 → 显示「不可达」）。直接捕获
+            // onMoveCompleted 闭包（其内部持有 model，长生命周期），视图销毁后仍有效。
+            let moveCompleted = onMoveCompleted
+            let manager = FilePromiseDragManager(item: target) { _ in
+                moveCompleted?(target)
             }
             managers.append(manager)
 

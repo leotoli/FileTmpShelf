@@ -19,18 +19,24 @@ final class HotKeyManager {
     /// ⌥X 的虚拟键码（X = kVK_ANSI_X = 7）
     static let keyCodeForOptionX: UInt32 = 7
 
+    /// ⌘↩ 跳转访达（V5-1）的键码：kVK_Return = 36
+    static let keyCodeForReturn: UInt32 = 36
+
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
     private var keyCode: UInt32
     private var modifiers: NSEvent.ModifierFlags
+    /// Carbon 热键唯一 id（signature "FTSH" 下的子 id）；⌥X 用 1，⌘↩ 用 2，避免冲突
+    private let hotKeyIDValue: UInt32
 
     /// 由面板控制器注入的触发回调。
     /// 注意：Carbon 热键事件在主线程派发，因此 onTrigger 总是被调用在主线程。
     var onTrigger: (() -> Void)?
 
-    init(keyCode: UInt32, modifiers: NSEvent.ModifierFlags) {
+    init(keyCode: UInt32, modifiers: NSEvent.ModifierFlags, hotKeyID: UInt32 = 1) {
         self.keyCode = keyCode
         self.modifiers = modifiers
+        self.hotKeyIDValue = hotKeyID
     }
 
     /// 冲突检测：通过 register() 抛出的 `RegisterError.hotKeyExists` 识别。
@@ -53,7 +59,7 @@ final class HotKeyManager {
             let installStatus = InstallEventHandler(
                 GetApplicationEventTarget(),
                 { (_, event, userData) -> OSStatus in
-                    guard let userData else { return noErr }
+                    guard let userData else { return OSStatus(eventNotHandledErr) }
                     let manager = Unmanaged<HotKeyManager>.fromOpaque(userData).takeUnretainedValue()
                     var hotKeyID = EventHotKeyID()
                     GetEventParameter(
@@ -65,10 +71,14 @@ final class HotKeyManager {
                         nil,
                         &hotKeyID
                     )
-                    if hotKeyID.id == 1 {
+                    if hotKeyID.id == manager.hotKeyIDValue {
                         manager.onTrigger?()
+                        return noErr
                     }
-                    return noErr
+                    // 关键：不匹配时返回 eventNotHandledErr，让事件继续派发到
+                    // 其他热键处理器。否则本处理器消费事件，后注册的热键（如 ⌘↩）
+                    // 永远收不到，导致 ⌥X/⌘↩ 互相干扰（用户反馈「无法关闭货架」）。
+                    return OSStatus(eventNotHandledErr)
                 },
                 1,
                 &eventType,
@@ -81,7 +91,7 @@ final class HotKeyManager {
             }
         }
 
-        let hotKeyID = EventHotKeyID(signature: OSType(0x46545348), id: 1) // "FTSH"
+        let hotKeyID = EventHotKeyID(signature: OSType(0x46545348), id: hotKeyIDValue) // "FTSH"
         let carbonModifiers = carbonModifierFlags(from: modifiers)
         let status = RegisterEventHotKey(
             keyCode,
