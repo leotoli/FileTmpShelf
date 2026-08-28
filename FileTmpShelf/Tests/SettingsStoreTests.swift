@@ -145,13 +145,13 @@ final class SettingsStoreTests: XCTestCase {
         // 开发版标记：Debug 构建版本号带 -dev 后缀（与签名正式版区分）
         XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": "0.1.0"]), "0.1.0-dev")
         XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": "2.0.3"]), "2.0.3-dev")
-        XCTAssertEqual(AppInfo.version(from: [:]), "0.1.1-dev", "缺失版本号应回退默认")
-        XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": ""]), "0.1.1-dev", "空版本号应回退默认")
+        XCTAssertEqual(AppInfo.version(from: [:]), "0.1.2-dev", "缺失版本号应回退默认")
+        XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": ""]), "0.1.2-dev", "空版本号应回退默认")
         #else
         XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": "0.1.0"]), "0.1.0")
         XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": "2.0.3"]), "2.0.3")
-        XCTAssertEqual(AppInfo.version(from: [:]), "0.1.1", "缺失版本号应回退默认")
-        XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": ""]), "0.1.1", "空版本号应回退默认")
+        XCTAssertEqual(AppInfo.version(from: [:]), "0.1.2", "缺失版本号应回退默认")
+        XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": ""]), "0.1.2", "空版本号应回退默认")
         #endif
     }
 

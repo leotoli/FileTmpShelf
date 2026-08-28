@@ -4,7 +4,7 @@
 
 与拷贝型工具（Yoink / Dropover）不同，FileTmpShelf **只存路径引用、不复制文件本体**：20GB 的视频也能瞬间挂载；拖到 Finder 或桌面时执行**真实移动**，源位置不再保留。
 
-> 当前版本：**v0.1.1**（详见 [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md)）
+> 当前版本：**v0.1.2**（详见 [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md)）
 
 ---
 
@@ -32,7 +32,7 @@
 
 ## 安装
 
-1. 从 [GitHub Releases](https://github.com/leotoli/FileTmpShelf/releases/latest) 下载 `FileTmpShelf-0.1.1.dmg`
+1. 从 [GitHub Releases](https://github.com/leotoli/FileTmpShelf/releases/latest) 下载 `FileTmpShelf-0.1.2.dmg`
 2. 双击挂载 dmg，将 **FileTmpShelf.app 拖入 Applications 文件夹**
 3. 从启动台或 Applications 打开 FileTmpShelf，菜单栏出现托盘图标即运行成功
 
@@ -55,6 +55,7 @@
 |--------|------|
 | `⌥X` | 唤出 / 隐藏货架面板（默认，可在设置中修改） |
 | `Esc` | 关闭面板 |
+| `Delete` | 移除选中的条目（仅移除引用，不移动源文件） |
 | `⌘ 点击` | 多选条目（切换选中） |
 | `⇧ 点击` | 区间选择条目 |
 | `⌘,` | 打开设置 |
