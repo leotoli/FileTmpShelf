@@ -125,9 +125,17 @@ final class FilePromiseDragManager: NSObject, NSFilePromiseProviderDelegate {
 
     /// 执行移动并处理结果。`writePromiseToURL` 的核心流程，抽出以便单测直接驱动
     /// （NSFilePromiseProvider 的 Finder 兑现回调依赖真实拖拽会话，无法在单测触发）。
+    /// - 拖回原处/原目录：跳过移动，直接移除链接（不移动文件）
     /// - 成功：completionHandler(nil) + 通知货架移除
     /// - 失败：completionHandler(error)，源文件保持原位（数据零丢失），货架条目保留
     func moveAndNotify(to url: URL, completionHandler: @escaping (Error?) -> Void) {
+        if shouldSkipMove(source: item.fileURL, destination: url) {
+            print("[FilePromiseMove] 拖回原处/原目录，跳过移动，仅移除链接: \(url.path)")
+            didCompleteMove = true
+            completionHandler(nil)
+            notifyMoveCompleted()
+            return
+        }
         performMove(to: url) { [weak self] result in
             switch result {
             case .success:
@@ -138,6 +146,19 @@ final class FilePromiseDragManager: NSObject, NSFilePromiseProviderDelegate {
                 completionHandler(error)
             }
         }
+    }
+
+    /// 是否跳过移动（直接移除链接，需求 2「拖回同一位置/目录不移动」）：
+    /// - 完整路径相同（拖回原处）→ 总是跳过
+    /// - 文件的目标目录 == 源目录（Finder 目标名 = displayName = 源名，等同"放回原处"；
+    ///   若 Finder 为避同名冲突改名如 `a 2.txt` 也命中）→ 跳过
+    /// - 目录只按完整路径相同判断：目录移动到同一父目录可能是重命名/归档，保持正常移动
+    private func shouldSkipMove(source: URL, destination: URL) -> Bool {
+        let s = source.standardizedFileURL
+        let d = destination.standardizedFileURL
+        if s.path == d.path { return true }
+        if item.isDirectory { return false }
+        return s.deletingLastPathComponent().path == d.deletingLastPathComponent().path
     }
 
     /// 可单测的移动核心：按源/目标卷关系分派。

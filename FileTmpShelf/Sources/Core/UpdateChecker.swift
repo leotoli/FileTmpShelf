@@ -7,10 +7,15 @@ struct SemVer: Equatable, Comparable {
     let patch: Int
 
     /// 从字符串解析：容忍 `v`/`V` 前缀（如 `v0.2.0`），失败返回 nil（非法/不足三段）。
+    /// 容忍 prerelease 后缀（如 `0.1.1-dev`）：忽略 `-` 之后的部分，保证开发版
+    ///（Debug 构建带 -dev 标记）也能参与版本比较。
     static func parse(_ string: String) -> SemVer? {
         var s = string.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.hasPrefix("v") || s.hasPrefix("V") {
             s.removeFirst()
+        }
+        if let dashIndex = s.firstIndex(of: "-") {
+            s = String(s[..<dashIndex])
         }
         let parts = s.split(separator: ".").compactMap { Int($0) }
         guard parts.count >= 3 else { return nil }

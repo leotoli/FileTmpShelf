@@ -141,10 +141,18 @@ final class SettingsStoreTests: XCTestCase {
     /// 版本号读取：测试宿主下 Bundle.main 是测试 runner 的 Info.plist，读不到 app 版本，
     /// 故验证可注入的纯函数版本（AppInfo.version(from:) 默认读 Bundle.main）。
     func testAppInfoVersion() {
+        #if DEBUG
+        // 开发版标记：Debug 构建版本号带 -dev 后缀（与签名正式版区分）
+        XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": "0.1.0"]), "0.1.0-dev")
+        XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": "2.0.3"]), "2.0.3-dev")
+        XCTAssertEqual(AppInfo.version(from: [:]), "0.1.1-dev", "缺失版本号应回退默认")
+        XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": ""]), "0.1.1-dev", "空版本号应回退默认")
+        #else
         XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": "0.1.0"]), "0.1.0")
         XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": "2.0.3"]), "2.0.3")
         XCTAssertEqual(AppInfo.version(from: [:]), "0.1.1", "缺失版本号应回退默认")
         XCTAssertEqual(AppInfo.version(from: ["CFBundleShortVersionString": ""]), "0.1.1", "空版本号应回退默认")
+        #endif
     }
 
     func testAppInfoRepoURL() {

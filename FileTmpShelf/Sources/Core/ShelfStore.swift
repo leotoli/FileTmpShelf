@@ -262,12 +262,17 @@ actor ShelfStore {
 
     /// 批量挂载，返回本次成功挂载数、被跳过的 URL 与总耗时（Spike S1 性能验证）。
     /// 注：返回的 count 为本次实际挂载数（非货架总数），便于 UI 提示"哪些没挂上"。
+    /// 去重（重复挂载 bug 修复）：同一标准化路径只挂载一次，重复拖入静默忽略
+    ///（第一次见到的路径为准；货架内已存在的路径同样去重）。
     func addBatch(_ urls: [URL]) -> (count: Int, skipped: [URL], elapsed: TimeInterval) {
         let start = Date()
         var skipped: [URL] = []
         var mounted = 0
+        var knownPaths = Set(items.map { $0.fileURL.standardizedFileURL.path })
         for url in urls {
             if let item = ShelfItem.make(from: url) {
+                let path = item.fileURL.standardizedFileURL.path
+                guard knownPaths.insert(path).inserted else { continue }
                 items.append(item)
                 mounted += 1
             } else {
@@ -280,7 +285,13 @@ actor ShelfStore {
 
     /// 移除条目（拖出成功 / 用户清空 / 失效清理）
     func remove(id: UUID) {
-        items.removeAll { $0.id == id }
+        remove(ids: [id])
+    }
+
+    /// 批量移除条目（Delete 键移除选中等）：一次 persist
+    func remove(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        items.removeAll { ids.contains($0.id) }
         persist()
     }
 

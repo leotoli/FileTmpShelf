@@ -36,6 +36,22 @@ final class ShelfStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file1).count, 1024)
     }
 
+    /// 重复挂载去重（bug 修复）：同一路径重复拖入只挂载一次（同一批次内重复 + 货架内已存在均去重）
+    func testAddBatchDeduplicatesSameFile() async throws {
+        let store = ShelfStore(storageURL: tempDir.appendingPathComponent("shelf1.json"))
+        let file = try makeTestFile(named: "dup.txt", size: 128)
+
+        // 同一文件在批次内重复 + 跨批次重复
+        let outcome1 = await store.addBatch([file, file])
+        XCTAssertEqual(outcome1.count, 1, "同批次内重复路径只挂载一次")
+
+        let outcome2 = await store.addBatch([file])
+        XCTAssertEqual(outcome2.count, 0, "货架内已存在的路径不再重复挂载")
+
+        let items = await store.all()
+        XCTAssertEqual(items.count, 1, "货架内不应出现重复条目")
+    }
+
     func testPersistAndReloadRoundTrip() async throws {
         let storeURL = tempDir.appendingPathComponent("shelf2.json")
         let store = ShelfStore(storageURL: storeURL)

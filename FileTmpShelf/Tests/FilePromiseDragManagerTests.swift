@@ -506,13 +506,35 @@ final class CombinedFilePromiseWriterTests: XCTestCase {
         let manager = FilePromiseDragManager(item: item) { _ in }
         XCTAssertFalse(manager.didCompleteMove, "初始应为 false")
 
-        // 同卷成功移动 → didCompleteMove = true
-        let dest = tempDir.appendingPathComponent("moveflag-dest.txt")
+        // 同卷成功移动（目标在不同目录，需求 2 的同目录跳过不生效）→ didCompleteMove = true
+        let destDir = tempDir.appendingPathComponent("dest", isDirectory: true)
+        try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+        let dest = destDir.appendingPathComponent("moveflag.txt")
         let exp = expectation(description: "move")
         manager.moveAndNotify(to: dest) { _ in exp.fulfill() }
         wait(for: [exp], timeout: 5)
         XCTAssertTrue(manager.didCompleteMove, "move 成功后应为 true")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: srcURL.path), "同卷移动后源应消失")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: srcURL.path), "移动后源应消失")
+    }
+
+    /// 需求 2：文件拖回原目录（目标目录 == 源目录）→ 跳过移动，直接移除链接：
+    /// didCompleteMove = true（货架移除链接）、源文件保留原位、completionHandler(nil)。
+    /// 目标文件名不同（Finder 为避同名冲突改名，如 `stay 2.txt`）仍应命中。
+    func testSkipMoveWhenFileDroppedIntoSourceDirectory() throws {
+        let (item, srcURL) = try makeItem(named: "stay.txt")
+        let manager = FilePromiseDragManager(item: item) { _ in }
+        XCTAssertFalse(manager.didCompleteMove, "初始应为 false")
+
+        let dest = tempDir.appendingPathComponent("stay 2.txt")
+        let exp = expectation(description: "skip-move")
+        manager.moveAndNotify(to: dest) { error in
+            XCTAssertNil(error, "跳过移动应回调 nil")
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 5)
+
+        XCTAssertTrue(manager.didCompleteMove, "跳过移动也应标记兑现（货架据此移除链接）")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: srcURL.path), "跳过移动 = 源文件保留原位")
     }
 
     private func makeItem(named name: String) throws -> (ShelfItem, URL) {

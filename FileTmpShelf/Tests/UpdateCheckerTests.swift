@@ -15,6 +15,12 @@ final class UpdateCheckerTests: XCTestCase {
         XCTAssertEqual(SemVer.parse("V1.0.0"), SemVer(major: 1, minor: 0, patch: 0))
     }
 
+    func testSemVerParsePrereleaseSuffix() {
+        // 开发版 -dev 标记（Debug 构建版本号后缀）应被容忍：忽略 - 之后的部分
+        XCTAssertEqual(SemVer.parse("0.1.1-dev"), SemVer(major: 0, minor: 1, patch: 1))
+        XCTAssertEqual(SemVer.parse("v1.2.3-beta.1"), SemVer(major: 1, minor: 2, patch: 3))
+    }
+
     func testSemVerParseInvalid() {
         XCTAssertNil(SemVer.parse(""))
         XCTAssertNil(SemVer.parse("not-a-version"))

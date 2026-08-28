@@ -2,6 +2,115 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// 无边框浮动面板：直接在 panel 层处理 Escape（NotchNotes 参考）。
+/// 比 local monitor 更可靠——不依赖 app active、无全局事件消费风险
+///（V5-1 曾因 local monitor 的 noErr 消费事件导致 ⌥X/⌘↩ 互相干扰）。
+final class ShelfPanel: NSPanel {
+    var onEscape: (() -> Void)?
+    /// 删除键（Delete/退格）回调：移除选中的货架条目（仅移除引用，不移动源文件）
+    var onDelete: (() -> Void)?
+
+    /// NSPanel 默认 canBecomeKey = false（nonactivating panel 不能成为 key window）。
+    /// sendEvent 只在 key window 收到 keyDown——必须重写让面板可成为 key window，
+    /// 否则 Esc 等键盘事件收不到（local monitor 时代不依赖此，panel 层就必须）。
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown {
+            switch event.keyCode {
+            case 53:  // kVK_Escape → 关闭面板
+                onEscape?()
+                return
+            case 51:  // kVK_Delete（退格/删除键）→ 移除选中的货架条目
+                onDelete?()
+                return
+            default:
+                break
+            }
+        }
+        super.sendEvent(event)
+    }
+}
+
+/// 首次点击即激活（NotchNotes 参考）：nonactivating 面板第一次点击即可交互，
+/// 避免「先点一次激活、再点一次才生效」的延迟感。
+class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+}
+
+/// 面板宿主视图：在 NSView 层处理文件拖放（NotchNotes 参考）。
+/// 相比 SwiftUI onDrop 的优势：可感知「拖拽进入」状态做高亮反馈，
+/// 且直接从 pasteboard 同步读取 URL（无需异步 NSItemProvider 解包）。
+final class FileDropHostingView<Content: View>: FirstMouseHostingView<Content> {
+    /// 拖拽进入/离开回调（高亮反馈）
+    var onFileDragTargeted: ((Bool) -> Void)?
+    /// 文件拖放完成回调（返回是否接受）
+    var onFilesDropped: (([URL]) -> Bool)?
+
+    private var isFileDragTargeted = false
+
+    required init(rootView: Content) {
+        super.init(rootView: rootView)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard pasteboardHasFileURLs(sender.draggingPasteboard) else { return [] }
+        setFileDragTargeted(true)
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        pasteboardHasFileURLs(sender.draggingPasteboard) ? .copy : []
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        setFileDragTargeted(false)
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        setFileDragTargeted(false)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        defer { setFileDragTargeted(false) }
+        let urls = fileURLs(from: sender.draggingPasteboard)
+        guard !urls.isEmpty else { return false }
+        return onFilesDropped?(urls) ?? false
+    }
+
+    private func pasteboardHasFileURLs(_ pasteboard: NSPasteboard) -> Bool {
+        pasteboard.availableType(from: [.fileURL]) != nil
+    }
+
+    /// 从 pasteboard 读取文件 URL（去重 + 标准化），无需异步 provider 解包。
+    private func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
+        var knownPaths = Set<String>()
+        return (pasteboard.pasteboardItems ?? []).compactMap { item in
+            guard let value = item.string(forType: .fileURL),
+                  let url = URL(string: value),
+                  url.isFileURL else { return nil }
+            let standardized = url.standardizedFileURL
+            guard knownPaths.insert(standardized.path).inserted else { return nil }
+            return standardized
+        }
+    }
+
+    private func setFileDragTargeted(_ isTargeted: Bool) {
+        guard isFileDragTargeted != isTargeted else { return }
+        isFileDragTargeted = isTargeted
+        onFileDragTargeted?(isTargeted)
+    }
+}
+
 /// 浮动面板控制器：NSPanel 无边框、置顶、不抢焦点。
 /// Spike S4 目标：验证面板作为拖入目标 + 拖出源的双向拖放行为。
 final class ShelfPanelController: NSObject {
@@ -19,9 +128,6 @@ final class ShelfPanelController: NSObject {
 
     /// 面板视图模型（V5-1 跳转访达：controller 需访问选中状态以响应 ⌘↩）
     private var panelModel: ShelfPanelModel?
-
-    /// 键盘事件监听器（面板可见时生效，隐藏时移除）：Escape 关闭
-    private var keyEventMonitor: Any?
 
     /// ⌘↩ 跳转访达的 Carbon 全局热键（面板可见时注册，隐藏时注销）。
     /// 用 Carbon 热键而非 local monitor 的原因（V5-1 全屏场景修复）：
@@ -66,15 +172,13 @@ final class ShelfPanelController: NSObject {
         // activate 后显式 makeKey 让 panel 变 key（不激活 app，只接管键盘焦点），
         // 货架切换 Menu 与新建/重命名/删除弹窗才能正常弹出。
         panel.makeKey()
-        // Escape 关闭（local monitor）
-        startKeyMonitor()
+        // Escape 由 ShelfPanel.sendEvent 在 panel 层处理（不依赖 app active）
         // ⌘↩ 跳转访达（Carbon 全局热键，面板可见时注册）
         startRevealHotKey()
     }
 
     func hide() {
         panel?.orderOut(nil)
-        stopKeyMonitor()
         stopRevealHotKey()
     }
 
@@ -110,29 +214,7 @@ final class ShelfPanelController: NSObject {
         panel?.alphaValue = value
     }
 
-    // MARK: - 键盘监听（Escape 关闭 + ⌘↩ 跳转访达）
-
-    /// 面板可见时启动 Escape 键监听；重复调用幂等（已有监听则跳过）。
-    private func startKeyMonitor() {
-        guard keyEventMonitor == nil else { return }
-        keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return event }
-            // kVK_Escape = 53 → 关闭面板
-            if event.keyCode == 53 {
-                self.hide()
-                return nil
-            }
-            return event
-        }
-    }
-
-    /// 面板隐藏时移除 Escape 键监听；幂等。
-    private func stopKeyMonitor() {
-        if let monitor = keyEventMonitor {
-            NSEvent.removeMonitor(monitor)
-            keyEventMonitor = nil
-        }
-    }
+    // MARK: - 键盘处理（Escape 在 panel 层 + ⌘↩ 跳转访达）
 
     /// 面板可见时注册 ⌘↩ Carbon 全局热键（跳转访达）；幂等。
     private func startRevealHotKey() {
@@ -170,9 +252,9 @@ final class ShelfPanelController: NSObject {
         NSWorkspace.shared.activateFileViewerSelecting([item.fileURL])
     }
 
-    /// 重新激活本 app + 面板变 key，让 local keyEventMonitor（Escape）持续收键盘事件。
-    /// 触发源：从 Finder 拖文件进面板后，拖拽源 Finder 保持 active → 本 app 失活。
-    /// 延迟 0.5s 等拖拽会话结束（拖放不切 Space，0.5s 足够）。
+    /// 重新激活本 app + 面板变 key（Escape 在 panel 层处理，但面板仍需要 key window
+    /// 承接 ⌘↩ 后的输入焦点）。触发源：从 Finder 拖文件进面板后，拖拽源 Finder
+    /// 保持 active → 本 app 失活。延迟 0.5s 等拖拽会话结束（拖放不切 Space，0.5s 足够）。
     private func reclaimKeyStatus() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             NSApp.activate(ignoringOtherApps: true)
@@ -181,7 +263,7 @@ final class ShelfPanelController: NSObject {
     }
 
     private func createPanel() {
-        let newPanel = NSPanel(
+        let newPanel = ShelfPanel(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 204),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -200,20 +282,38 @@ final class ShelfPanelController: NSObject {
 
         let model = ShelfPanelModel(store: store)
         panelModel = model
-        let content = NSHostingView(
+        let content = FileDropHostingView(
             rootView: ShelfPanelView(
                 model: model,
                 onDismiss: { [weak self] in
                     self?.hide()
-                },
-                onReclaimKey: { [weak self] in
-                    self?.reclaimKeyStatus()
                 }
             ) { [weak self] count in
                 self?.onItemCountChange?(count)
             }
         )
+        // 拖放接线（NotchNotes 参考）：高亮反馈 + 文件接收（NSHostingView 层直接读 URL）
+        content.onFileDragTargeted = { [weak self] isTargeted in
+            self?.panelModel?.setShelfDropTargeted(isTargeted)
+        }
+        content.onFilesDropped = { [weak self] urls in
+            guard let self, let model = self.panelModel else { return false }
+            let accepted = model.addDroppedURLs(urls)
+            if accepted {
+                // 拖放后拖拽源（Finder）保持 active → reclaim 让面板重新变 key
+                self.reclaimKeyStatus()
+            }
+            return accepted
+        }
         newPanel.contentView = content
+        // Escape 在 panel 层处理（不依赖 app active，替代原 local monitor）
+        newPanel.onEscape = { [weak self] in
+            self?.hide()
+        }
+        // Delete 键移除选中的货架条目（仅移除引用，不移动源文件）
+        newPanel.onDelete = { [weak self] in
+            self?.panelModel?.removeSelected()
+        }
 
         // 位置在 show() 时按鼠标所在屏计算；此处仅监听移动。
         // 用户拖动结束（didMove）反算「锚点+偏移」并持久化（V2-2 迁移到新模型）。
@@ -283,21 +383,17 @@ struct ShelfPanelView: View {
 
     /// 面板关闭回调（header 关闭按钮 + Escape 键触发）
     var onDismiss: (() -> Void)?
-    /// 拖放完成后重新激活回调（V5-1：从 Finder 拖文件后 reclaim key，保证键盘监听持续）
-    var onReclaimKey: (() -> Void)?
     /// 面板宽度用于自适应布局（V2 固定 520，后续可调整）
     private let panelWidth: CGFloat = 520
 
     init(
         model: ShelfPanelModel,
         onDismiss: (() -> Void)? = nil,
-        onReclaimKey: (() -> Void)? = nil,
         onItemsChange: ((Int) -> Void)? = nil
     ) {
         self.model = model
         self.model.onItemsChange = onItemsChange
         self.onDismiss = onDismiss
-        self.onReclaimKey = onReclaimKey
     }
 
     var body: some View {
@@ -307,14 +403,21 @@ struct ShelfPanelView: View {
         }
         .padding(12)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .frame(width: 520, height: 204)
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-            model.addDroppedFiles(providers)
-            // V5-1 修复：从 Finder 拖文件后，拖拽源 Finder 保持 active → 本 app 失活 →
-            // 键盘监听失效。拖放完成后 reclaim key（延迟到拖拽会话结束）。
-            onReclaimKey?()
-            return true
+        // 拖拽进入高亮（NotchNotes 参考）：边框提亮 + 柔和阴影
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(
+                    Color.accentColor.opacity(model.isShelfDropTargeted ? 0.85 : 0),
+                    lineWidth: 2
+                )
         }
+        .shadow(
+            color: .black.opacity(model.isShelfDropTargeted ? 0.22 : 0),
+            radius: 16,
+            y: 6
+        )
+        .animation(.easeOut(duration: 0.15), value: model.isShelfDropTargeted)
+        .frame(width: 520, height: 204)
         // 注：空白点击清空选择不做 SwiftUI 手势（会干扰条目 overlay 点击，Bug3 教训）；
         // 如需空白清空，由面板背景 NSView 层处理（后续增强）。
     }
@@ -536,6 +639,8 @@ final class ShelfPanelModel: ObservableObject {
     @Published private(set) var selectedShelfID: UUID?
     /// 多选状态（V2-6）：⌘ 切换 / Shift 区间 / 点击替换 / 空白清空
     @Published private(set) var selection = ShelfSelection()
+    /// 拖拽进入高亮（NotchNotes 参考：NSHostingView 层拖放反馈）
+    @Published private(set) var isShelfDropTargeted = false
     private let store: ShelfStore
     /// 条目数变化回调（菜单栏角标，体验增强 3.4）
     var onItemsChange: ((Int) -> Void)?
@@ -618,20 +723,24 @@ final class ShelfPanelModel: ObservableObject {
         notifyCount()
     }
 
-    func addDroppedFiles(_ providers: [NSItemProvider]) {
+    /// 设置拖拽进入高亮状态（NotchNotes 参考，由 FileDropHostingView 层回调）
+    func setShelfDropTargeted(_ isTargeted: Bool) {
+        isShelfDropTargeted = isTargeted
+    }
+
+    /// 同步接收拖入的 URL（NSHostingView 层从 pasteboard 直接读，无需异步 provider 解包）。
+    /// 返回是否接受（有有效文件 URL）。实际入库异步执行，挂载完成后刷新条目。
+    @discardableResult
+    func addDroppedURLs(_ urls: [URL]) -> Bool {
+        let fileURLs = urls.filter { $0.isFileURL }
+        guard !fileURLs.isEmpty else { return false }
         Task {
-            var urls: [URL] = []
-            for provider in providers {
-                if let url = await loadFileURL(from: provider) {
-                    urls.append(url)
-                }
-            }
-            guard !urls.isEmpty else { return }
-            let outcome = await store.addBatch(urls)
+            let outcome = await store.addBatch(fileURLs)
             items = await store.all()
             notifyCount()
-            print("[ShelfPanel] 挂载 \(urls.count) 个文件, 共 \(outcome.count) 条, 耗时 \(String(format: "%.3f", outcome.elapsed))s")
+            print("[ShelfPanel] 挂载 \(fileURLs.count) 个文件, 共 \(outcome.count) 条, 耗时 \(String(format: "%.3f", outcome.elapsed))s")
         }
+        return true
     }
 
     func removeItem(_ item: ShelfItem) {
@@ -639,6 +748,18 @@ final class ShelfPanelModel: ObservableObject {
             await store.remove(id: item.id)
             items = await store.all()
             selection.remove([item.id])
+            notifyCount()
+        }
+    }
+
+    /// 移除选中的条目（Delete 键）：从货架移除引用，不移动/删除源文件。无选中则忽略。
+    func removeSelected() {
+        let ids = selection.ids
+        guard !ids.isEmpty else { return }
+        Task {
+            await store.remove(ids: ids)
+            items = await store.all()
+            selection.remove(ids)
             notifyCount()
         }
     }
@@ -696,24 +817,6 @@ final class ShelfPanelModel: ObservableObject {
             guard let current = await store.currentShelf() else { return }
             await store.deleteShelf(id: current.id)
             await refresh()
-        }
-    }
-
-    private func loadFileURL(from provider: NSItemProvider) async -> URL? {
-        guard provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) else { return nil }
-        return await withCheckedContinuation { continuation in
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                let url: URL?
-                if let data = item as? Data,
-                   let parsed = URL(dataRepresentation: data, relativeTo: nil) {
-                    url = parsed
-                } else if let parsed = item as? URL {
-                    url = parsed
-                } else {
-                    url = nil
-                }
-                continuation.resume(returning: url)
-            }
         }
     }
 }
